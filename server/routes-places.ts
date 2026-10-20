@@ -300,7 +300,7 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
         headers: {
           "content-type": "application/json",
           "X-Goog-Api-Key": googleKey,
-          "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.nationalPhoneNumber,places.googleMapsUri",
+          "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.primaryType,places.types,places.nationalPhoneNumber,places.googleMapsUri",
         },
         body: JSON.stringify({
           includedTypes: ["pharmacy"],
@@ -321,8 +321,13 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
         for (const item of body.places ?? []) {
           const lat = item.location?.latitude, lng = item.location?.longitude;
           const address = String(item.formattedAddress ?? "");
+          if (item.primaryType !== "pharmacy") continue;
           if (typeof lat !== "number" || typeof lng !== "number" || !isWithinBounds(lat, lng, bounds)) continue;
-          if (postalCode && !matchesPostalCode(address, postalCode)) continue;
+          const listedPostalCodes = (item.addressComponents ?? [])
+            .filter((component: any) => component.types?.includes("postal_code"))
+            .map((component: any) => component.longText ?? component.shortText)
+            .filter((code: unknown): code is string => typeof code === "string");
+          if (postalCode && listedPostalCodes.length && !listedPostalCodes.some((code: string) => matchesPostalCode(code, postalCode))) continue;
           const name = item.displayName?.text ?? "Pharmacy";
           shops.push({
             id: `g:${item.id}`,

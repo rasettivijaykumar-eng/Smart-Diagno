@@ -159,11 +159,16 @@ describe("Smart Diagno platform", () => {
         assert.ok(body.locationRestriction.circle.radius >= 100);
         assert.ok(body.locationRestriction.circle.radius < 50_000);
         assert.deepEqual(body.locationRestriction.circle.center, { latitude: 13.4251452, longitude: 79.5875358 });
+        assert.match(String((init?.headers as Record<string, string>)["X-Goog-FieldMask"]), /places\.primaryType/);
+        assert.match(String((init?.headers as Record<string, string>)["X-Goog-FieldMask"]), /places\.addressComponents/);
         return new Response(JSON.stringify({
           places: [
-            { id: "local-google", displayName: { text: "Google Local Pharmacy" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517581, India", location: { latitude: 13.42, longitude: 79.58 } },
-            { id: "wrong-postal", displayName: { text: "Wrong Postal Pharmacy" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517502, India", location: { latitude: 13.42, longitude: 79.58 } },
-            { id: "outside", displayName: { text: "Outside Village Pharmacy" }, formattedAddress: "Andhra Pradesh 517581, India", location: { latitude: 13.50, longitude: 79.58 } },
+            { id: "local-google", primaryType: "pharmacy", types: ["pharmacy", "store"], displayName: { text: "Google Local Pharmacy" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517581, India", addressComponents: [{ longText: "517581", types: ["postal_code"] }], location: { latitude: 13.42, longitude: 79.58 } },
+            { id: "wrong-postal", primaryType: "pharmacy", types: ["pharmacy"], displayName: { text: "Wrong Postal Pharmacy" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517502, India", addressComponents: [{ longText: "517502", types: ["postal_code"] }], location: { latitude: 13.42, longitude: 79.58 } },
+            { id: "outside", primaryType: "pharmacy", types: ["pharmacy"], displayName: { text: "Outside Village Pharmacy" }, formattedAddress: "Andhra Pradesh 517581, India", addressComponents: [{ longText: "517581", types: ["postal_code"] }], location: { latitude: 13.50, longitude: 79.58 } },
+            { id: "clinic", primaryType: "medical_clinic", types: ["medical_clinic", "pharmacy"], displayName: { text: "Dr. Raju Pharmacy and Clinic" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517581, India", addressComponents: [{ longText: "517581", types: ["postal_code"] }], location: { latitude: 13.42, longitude: 79.58 } },
+            { id: "bricks", primaryType: "hardware_store", types: ["hardware_store"], displayName: { text: "K.C. Babu Bricks" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517581, India", addressComponents: [{ longText: "517581", types: ["postal_code"] }], location: { latitude: 13.42, longitude: 79.58 } },
+            { id: "postal-missing", primaryType: "pharmacy", types: ["pharmacy"], displayName: { text: "Pharmacy Without Listed Pincode" }, formattedAddress: "Narayanavanam, Andhra Pradesh, India", location: { latitude: 13.42, longitude: 79.58 } },
           ],
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
@@ -184,7 +189,11 @@ describe("Smart Diagno platform", () => {
       assert.equal(result.body.center.lat, 13.4251452);
       assert.equal(result.body.mapListingsAvailable, true);
       assert.deepEqual(result.body.providers, { googlePlaces: "available", openStreetMap: "available" });
-      assert.deepEqual(result.body.shops.map((shop: any) => shop.name), ["Google Local Pharmacy", "Local Medicals"]);
+      assert.deepEqual(result.body.shops.map((shop: any) => shop.name), [
+        "Google Local Pharmacy",
+        "Pharmacy Without Listed Pincode",
+        "Local Medicals",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (originalMapsKey === undefined) delete process.env.GOOGLE_MAPS_API_KEY;

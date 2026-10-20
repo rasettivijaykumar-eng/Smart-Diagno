@@ -726,19 +726,22 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
               </Alert>}
               {googlePlacesUnavailable && !pharmacyMapsUnavailable && <Alert kind="warn">Google Maps Places is not configured on this server, so only shops listed in OpenStreetMap can appear. For a more complete shop list, configure GOOGLE_MAPS_API_KEY with Places API enabled in the Render environment.</Alert>}
               {loadingPharmacies ? <Loading label="Finding pharmacies in this village…" /> : nearbyPharmacies.length > 0 ? (
-                <div className="pharmacy-registration-list" role="radiogroup" aria-label="Pharmacies in the selected village">
-                  {nearbyPharmacies.map((shop) => (
-                    <button
-                      type="button"
-                      key={shop.id}
-                      className={`pharmacy-registration-option ${form.placeId === shop.id ? "selected" : ""}`}
-                      onClick={() => selectPharmacy(shop)}
-                    >
-                      <span><strong>{shop.name}</strong><small>{shop.address || "Address not listed"}</small></span>
-                      <small>{shop.source === "google" ? "Google Maps listing" : "OpenStreetMap listing"}</small>
-                    </button>
-                  ))}
-                </div>
+                <>
+                  <small className="muted">{nearbyPharmacies.length} pharmacy listings found. Only listings categorized as pharmacies are shown; map listings may not include every local shop.</small>
+                  <div className="pharmacy-registration-list" role="radiogroup" aria-label="Pharmacies in the selected village">
+                    {nearbyPharmacies.map((shop) => (
+                      <button
+                        type="button"
+                        key={shop.id}
+                        className={`pharmacy-registration-option ${form.placeId === shop.id ? "selected" : ""}`}
+                        onClick={() => selectPharmacy(shop)}
+                      >
+                        <span><strong>{shop.name}</strong><small>{shop.address || "Address not listed"}</small></span>
+                        <small>{shop.source === "google" ? "Google Maps pharmacy" : "OpenStreetMap pharmacy"}</small>
+                      </button>
+                    ))}
+                  </div>
+                </>
               ) : !loadingPharmacies && pharmacyLocation && !pharmacyLocationError && !pharmacyMapsUnavailable ? <small className="muted">No pharmacies were found in this area. Search again or enter your shop details below.</small> : null}
               {nearbyPharmacies.some((shop) => shop.source === "openstreetmap") && <small className="muted">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a></small>}
             </div>
