@@ -1,0 +1,1330 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Activity, AlertTriangle, Bell, Building2, CalendarDays, Download, Eye, EyeOff, FileText, HeartPulse, HelpCircle, Info, LocateFixed, MapPin, MessageSquare, Navigation, Pill, Plus, Search, Send, ShieldAlert, Sparkles, Star, Stethoscope, Trash2, Upload, UserPlus, Video, X } from "lucide-react";
+import { del, get, patch, post, put } from "./api";
+import { useAuth } from "./auth";
+import { BookingModal, DoctorSearch } from "./DoctorSearch";
+import { ConsultationChatModal } from "./ConsultationChat";
+import { GoogleMeetLobbyModal } from "./GoogleMeetLobby";
+import { Link, navigate } from "./router";
+import { Alert, Badge, Empty, Field, fmtDate, fmtDateTime, humanize, Loading, Modal, Panel, statusTone, SubmitButton, useAction, useLoad } from "./ui";
+
+type Appt = { id: string; doctorName: string; start: string; mode: string; status: string; reason: string; durationMin: number; videoNote?: string };
+type RxItem = { name: string; dose: string; route: string; frequency: string; timing?: string; durationDays: number; times: string[]; instructions?: string };
+type Rx = { id: string; doctorName: string; status: string; issuedAt: string; items: RxItem[]; notes: string; verifyPath: string; revokeReason?: string };
+type DoseLog = { prescriptionId: string; itemIndex: number; scheduledAt: string; status: "taken" | "skipped"; respondedAt: string };
+
+/* ---------- Overview ---------- */
+export function PatientOverview() {
+  const [chatApptId, setChatApptId] = useState<string | null>(null);
+  const appts = useLoad(() => get<{ appointments: Appt[] }>("/appointments"), []);
+  const alerts = useLoad(() => get<{ alerts: Array<{ level: string; message: string }> }>("/health-alerts"), []);
+  const rx = useLoad(() => get<{ prescriptions: Rx[] }>("/prescriptions"), []);
+  const orders = useLoad(() => get<{ orders: any[] }>("/orders"), []);
+  const upcoming = (appts.data?.appointments ?? []).filter((a) => a.status === "confirmed" && new Date(a.start) > new Date());
+  const activeOrders = (orders.data?.orders ?? []).filter((o) => !["delivered", "cancelled", "rejected"].includes(o.status));
+  return (
+    <div className="grid-2">
+      <Panel title="Upcoming appointments" action={<Link to="/app/doctors" className="text-link">Find a doctor</Link>}>
+        {appts.loading ? <Loading /> : upcoming.length === 0 ? <Empty icon={<CalendarDays size={22} />} title="Nothing booked" text="Search verified doctors and book a consultation." /> :
+          <ul className="list">{upcoming.slice(0, 4).map((a) => (
+            <li key={a.id}>
+              <div><strong>{a.doctorName}</strong><small>{fmtDateTime(a.start)} · {a.mode === "online" ? "Online" : "In person"}</small></div>
+              <div className="row-actions">
+                <Badge tone="good">Confirmed</Badge>
+                <button className="button button-small" onClick={() => setChatApptId(a.id)}>
+                  <MessageSquare size={13} /> Chat
+                </button>
+              </div>
+            </li>
+          ))}</ul>}
+      </Panel>
+      {chatApptId && <ConsultationChatModal appointmentId={chatApptId} onClose={() => setChatApptId(null)} />}
+      <Panel title="Health alerts" action={<Link to="/app/health" className="text-link">Symptom log</Link>}>
+        {alerts.loading ? <Loading /> : alerts.error || !alerts.data ? <Alert kind="error">{alerts.error ?? "Couldn't load alerts."}</Alert> : alerts.data.alerts.length === 0 ? <Empty title="No alerts" text="Alerts appear when your symptom log matches simple, fixed rules. They are not diagnoses." /> :
+          <ul className="list">{alerts.data.alerts.map((a, i) => <li key={i}><Alert kind={a.level === "urgent" ? "error" : "warn"}>{a.message}</Alert></li>)}</ul>}
+      </Panel>
+      <Panel title="Active prescriptions" action={<Link to="/app/medicines" className="text-link">Medicines</Link>}>
+        {rx.loading ? <Loading /> : !rx.data ? <Alert kind="error">{rx.error ?? "Couldn't load."}</Alert> : (rx.data.prescriptions.filter((p) => p.status === "active")).length === 0 ? <Empty icon={<Pill size={22} />} title="No active prescriptions" text="Prescriptions issued by your doctor after a consultation appear here." /> :
+          <ul className="list">{rx.data.prescriptions.filter((p) => p.status === "active").map((p) => <li key={p.id}><div><strong>{p.id}</strong><small>{p.items.map((i) => i.name).join(", ")}</small></div><Badge tone="good">Active</Badge></li>)}</ul>}
+      </Panel>
+      <Panel title="Pharmacy orders" action={<Link to="/app/orders" className="text-link">Orders</Link>}>
+        {orders.loading ? <Loading /> : activeOrders.length === 0 ? <Empty title="No open orders" text="Share a prescription with a verified pharmacy to request a quotation." /> :
+          <ul className="list">{activeOrders.map((o) => <li key={o.id}><div><strong>{o.pharmacyName}</strong><small>{o.prescription?.id}</small></div><Badge tone={statusTone(o.status)}>{humanize(o.status)}</Badge></li>)}</ul>}
+      </Panel>
+    </div>
+  );
+}
+
+/* ---------- Assistant ---------- */
+const urgentSigns: Array<[string, string]> = [
+  ["chest-pain", "Chest pain or pressure"],
+  ["trouble-breathing", "Severe trouble breathing"],
+  ["stroke-signs", "Face drooping, arm weakness, slurred speech"],
+  ["severe-bleeding", "Severe bleeding"],
+  ["loss-consciousness", "Fainting or unresponsive"]
+];
+
+type ChatSummary = { id: string; title: string; updatedAt: string; count: number };
+type ChatDetail = { id: string; title: string; updatedAt: string; messages: any[] };
+
+const HYDERABAD_PRESETS = [
+  { label: "Banjara Hills", lat: 17.4138, lng: 78.4325 },
+  { label: "Secunderabad", lat: 17.4399, lng: 78.4983 },
+  { label: "Gachibowli", lat: 17.4401, lng: 78.3489 },
+  { label: "Madhapur", lat: 17.4484, lng: 78.3915 },
+  { label: "Ameerpet", lat: 17.4374, lng: 78.4487 },
+  { label: "Kukatpally", lat: 17.4849, lng: 78.3997 },
+  { label: "Mehdipatnam", lat: 17.3930, lng: 78.4307 },
+  { label: "LB Nagar", lat: 17.3460, lng: 78.5483 },
+];
+
+export function Assistant() {
+  const { user } = useAuth();
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [activeChat, setActiveChat] = useState<ChatDetail | null>(null);
+  const [loadingChats, setLoadingChats] = useState(true);
+  const [loadingChat, setLoadingChat] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [concern, setConcern] = useState("");
+  const [signs, setSigns] = useState<string[]>([]);
+  const [showSigns, setShowSigns] = useState(false);
+  const [coords, setCoords] = useState<{ lat: number; lng: number }>({ lat: 17.3843, lng: 78.4583 });
+  const [locationLabel, setLocationLabel] = useState("Detecting location…");
+  const [showAreaPicker, setShowAreaPicker] = useState(false);
+  const [areaSearch, setAreaSearch] = useState("");
+  const [areaSearching, setAreaSearching] = useState(false);
+  const [bookingDoctor, setBookingDoctor] = useState<{ id: string; name: string } | null>(null);
+  const [hospitalNotice, setHospitalNotice] = useState<{ hospital: any; reason: "auth" | "no-doctor" } | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-detect real location via IP then refine with GPS if permitted
+  useEffect(() => {
+    // Step 1: Quick IP-based location from server
+    get<{ lat: number; lng: number; label: string; source: string }>("/places/my-location")
+      .then((data) => {
+        if (data?.lat && data?.lng) {
+          setCoords({ lat: data.lat, lng: data.lng });
+          setLocationLabel(data.label || "Your area");
+        }
+      })
+      .catch(() => {});
+
+    // Step 2: Refine with GPS if available
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+          setLocationLabel("Live GPS location");
+        },
+        () => { /* keep IP-based */ },
+        { timeout: 8000, enableHighAccuracy: true }
+      );
+    }
+  }, []);
+
+  // Reload active chat with fresh coords whenever coords change (auto-refreshes stale Bangalore hospitals)
+  const selectChat = async (id: string, withCoords?: { lat: number; lng: number }) => {
+    setActiveChatId(id);
+    setLoadingChat(true);
+    setError(null);
+    const loc = withCoords ?? coords;
+    const url = `/chats/${id}?lat=${loc.lat}&lng=${loc.lng}&radiusKm=20`;
+    const res = await get<{ chat: ChatDetail }>(url).catch((err) => {
+      setError(err?.message || "Failed to load chat.");
+      return null;
+    });
+    if (res?.chat) {
+      setActiveChat(res.chat);
+    }
+    setLoadingChat(false);
+  };
+
+  // Fetch chat history
+  const fetchChats = async (selectFirst = false) => {
+    setLoadingChats(true);
+    const res = await get<{ chats: ChatSummary[] }>("/chats").catch(() => null);
+    if (res?.chats) {
+      setChats(res.chats);
+      if (selectFirst && res.chats.length > 0 && !activeChatId) {
+        selectChat(res.chats[0].id);
+      }
+    }
+    setLoadingChats(false);
+  };
+
+  useEffect(() => {
+    fetchChats(true);
+  }, []);
+
+  // When coords change and there's an active chat, reload it with new coords
+  const coordsRef = useRef(coords);
+  useEffect(() => {
+    // Only trigger if coords actually changed meaningfully
+    const prev = coordsRef.current;
+    const dist = Math.sqrt((coords.lat - prev.lat) ** 2 + (coords.lng - prev.lng) ** 2);
+    if (dist > 0.001 && activeChatId) {
+      coordsRef.current = coords;
+      selectChat(activeChatId, coords);
+    }
+  }, [coords]);
+
+  // Auto-scroll on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [activeChat?.messages, sending]);
+
+  // Create new chat
+  const handleNewChat = async () => {
+    setError(null);
+    const res = await post<{ chat: ChatDetail }>("/chats", {}).catch((err) => {
+      setError(err?.message || "Could not start a new chat.");
+      return null;
+    });
+    if (res?.chat) {
+      setChats((prev) => [{ id: res.chat.id, title: res.chat.title, updatedAt: res.chat.updatedAt, count: 0 }, ...prev]);
+      setActiveChatId(res.chat.id);
+      setActiveChat(res.chat);
+      setConcern("");
+      setSigns([]);
+    }
+  };
+
+  // Delete chat
+  const handleDeleteChat = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Are you sure you want to delete this chat consultation?")) return;
+    const res = await del<{ ok: boolean }>(`/chats/${id}`).catch(() => null);
+    if (res?.ok) {
+      const remaining = chats.filter((c) => c.id !== id);
+      setChats(remaining);
+      if (activeChatId === id) {
+        if (remaining.length > 0) {
+          selectChat(remaining[0].id);
+        } else {
+          setActiveChatId(null);
+          setActiveChat(null);
+        }
+      }
+    }
+  };
+
+  // Send message in current chat (or create new if none active)
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!concern.trim() || sending) return;
+
+    let chatId = activeChatId;
+    if (!chatId) {
+      const newChatRes = await post<{ chat: ChatDetail }>("/chats", {}).catch(() => null);
+      if (!newChatRes?.chat) {
+        setError("Failed to initialize conversation.");
+        return;
+      }
+      chatId = newChatRes.chat.id;
+      setActiveChatId(chatId);
+      setActiveChat(newChatRes.chat);
+      setChats((prev) => [{ id: newChatRes.chat.id, title: newChatRes.chat.title, updatedAt: newChatRes.chat.updatedAt, count: 0 }, ...prev]);
+    }
+
+    setSending(true);
+    setError(null);
+
+    const payload = {
+      concern: concern.trim(),
+      urgentSymptoms: signs,
+      lat: coords.lat,
+      lng: coords.lng,
+    };
+
+    const res = await post<{ title: string; updatedAt: string; messages: any[] }>(`/chats/${chatId}/messages`, payload).catch((err) => {
+      setError(err?.message || "Failed to send message. Please try again.");
+      return null;
+    });
+
+    if (res?.messages) {
+      setActiveChat((prev) => prev ? { ...prev, title: res.title, updatedAt: res.updatedAt, messages: res.messages } : null);
+      setChats((prev) => prev.map((c) => c.id === chatId ? { ...c, title: res.title, updatedAt: res.updatedAt, count: res.messages.length } : c));
+      setConcern("");
+      setSigns([]);
+      setShowSigns(false);
+    }
+    setSending(false);
+  };
+
+  // Book appointment handler
+  const handleBookHospital = (hospital: any) => {
+    if (!user) {
+      setHospitalNotice({ hospital, reason: "auth" });
+      return;
+    }
+    if (hospital.doctors && hospital.doctors.length > 0) {
+      setBookingDoctor(hospital.doctors[0]);
+    } else {
+      setHospitalNotice({ hospital, reason: "no-doctor" });
+    }
+  };
+
+  return (
+    <div className="stack-lg">
+      <Alert kind="warn">
+        This assistant cannot diagnose, prescribe, or advise on medicine doses. Its list of warning signs is not exhaustive. If you feel in danger, call your local emergency number now.
+      </Alert>
+
+      <div className="chat-layout">
+        {/* Chat History Sidebar */}
+        <aside className="chat-history-pane">
+          <div className="chat-history-header">
+            <h3><MessageSquare size={17} /> Consultation History</h3>
+            <button type="button" className="button button-small" onClick={handleNewChat}>
+              <Plus size={14} /> New
+            </button>
+          </div>
+
+          {loadingChats ? (
+            <Loading label="Loading history…" />
+          ) : chats.length === 0 ? (
+            <div style={{ padding: "16px 8px", textAlign: "center" }}>
+              <p className="muted" style={{ fontSize: "13px", margin: "14px 0" }}>No past consultations. Start a new chat to describe your symptoms.</p>
+              <button type="button" className="outline-button button-small" style={{ width: "100%" }} onClick={handleNewChat}>
+                <Plus size={14} /> Start new chat
+              </button>
+            </div>
+          ) : (
+            <ul className="chat-history-list">
+              {chats.map((c) => (
+                <li key={c.id}>
+                  <div
+                    className={`chat-history-item ${activeChatId === c.id ? "active" : ""}`}
+                    onClick={() => selectChat(c.id)}
+                  >
+                    <div className="chat-history-item-content">
+                      <strong>{c.title}</strong>
+                      <small>{fmtDateTime(c.updatedAt)} · {c.count} messages</small>
+                    </div>
+                    <button
+                      type="button"
+                      className="chat-history-delete"
+                      title="Delete chat"
+                      onClick={(e) => handleDeleteChat(c.id, e)}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </aside>
+
+        {/* Chat Main Area */}
+        <main className="chat-main-pane">
+          <div className="chat-main-header">
+            <h2>
+              <HeartPulse size={18} color="var(--blue)" />
+              {activeChat ? activeChat.title : "Smart Diagno Assistant"}
+            </h2>
+            <div className="badge-row">
+              <Badge tone="good">Google Maps Hospitals</Badge>
+              <Badge tone="info">20 km radius</Badge>
+            </div>
+          </div>
+
+          {/* Location Bar */}
+          <div className="chat-location-bar">
+            <div className="chat-location-details">
+              <MapPin size={15} color="var(--red)" />
+              <span className="loc-text">
+                <span className="loc-label">Showing hospitals within 20 km of</span>
+                <strong className="loc-place">{locationLabel}</strong>
+              </span>
+            </div>
+            <div className="chat-location-buttons">
+              <button
+                type="button"
+                className="outline-button button-small"
+                style={{ fontSize: "12px", gap: "5px" }}
+                onClick={() => {
+                  if (navigator.geolocation) {
+                    setLocationLabel("Detecting GPS…");
+                    navigator.geolocation.getCurrentPosition(
+                      (pos) => {
+                        const newCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                        setCoords(newCoords);
+                        setLocationLabel("Live GPS location");
+                        if (activeChatId) selectChat(activeChatId, newCoords);
+                      },
+                      () => setLocationLabel(locationLabel),
+                      { timeout: 8000, enableHighAccuracy: true }
+                    );
+                  }
+                }}
+                title="Use your live GPS location"
+              >
+                <LocateFixed size={12} /> Use GPS
+              </button>
+              <button
+                type="button"
+                className="outline-button button-small"
+                style={{ fontSize: "12px" }}
+                onClick={() => setShowAreaPicker((v) => !v)}
+              >
+                {showAreaPicker ? "Close" : "Change Area"}
+              </button>
+            </div>
+          </div>
+
+          {/* Area Picker */}
+          {showAreaPicker && (
+            <div className="chat-area-picker-card">
+              <div className="chat-area-picker-header">
+                <strong>Search or pick an area within 20 km</strong>
+                <button type="button" className="icon-btn" style={{ width: 28, height: 28 }} onClick={() => setShowAreaPicker(false)}>
+                  <X size={14} />
+                </button>
+              </div>
+              <form
+                className="chat-area-search-form"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!areaSearch.trim()) return;
+                  setAreaSearching(true);
+                  try {
+                    const data = await get<{ lat: number; lng: number; label: string }>(`/places/geocode?q=${encodeURIComponent(areaSearch)}`);
+                    if (data?.lat) {
+                      const newCoords = { lat: data.lat, lng: data.lng };
+                      setCoords(newCoords);
+                      setLocationLabel(data.label?.split(",").slice(0, 2).join(",").trim() || areaSearch);
+                      setShowAreaPicker(false);
+                      setAreaSearch("");
+                      if (activeChatId) selectChat(activeChatId, newCoords);
+                    }
+                  } catch { /* ignore */ } finally {
+                    setAreaSearching(false);
+                  }
+                }}
+              >
+                <input
+                  value={areaSearch}
+                  onChange={(e) => setAreaSearch(e.target.value)}
+                  placeholder="Type area name, e.g. Hitech City, Kukatpally…"
+                  autoFocus
+                />
+                <button type="submit" className="button button-small" disabled={areaSearching}>
+                  {areaSearching ? "…" : <><Search size={13} /> Go</>}
+                </button>
+              </form>
+              <div className="preset-chips">
+                {HYDERABAD_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    className="chip"
+                    style={{ fontSize: "12px", padding: "5px 12px", minHeight: 32 }}
+                    onClick={() => {
+                      const newCoords = { lat: p.lat, lng: p.lng };
+                      setCoords(newCoords);
+                      setLocationLabel(p.label + ", Hyderabad");
+                      setShowAreaPicker(false);
+                      if (activeChatId) selectChat(activeChatId, newCoords);
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Messages Scroll Area */}
+          <div className="chat-messages-scroll">
+            {loadingChat ? (
+              <Loading label="Loading conversation…" />
+            ) : !activeChat || activeChat.messages.length === 0 ? (
+              <div style={{ padding: "40px 20px", textAlign: "center", display: "grid", gap: "14px", justifyItems: "center" }}>
+                <div style={{ background: "var(--paper)", padding: "18px", borderRadius: "50%", color: "var(--blue)" }}>
+                  <HeartPulse size={38} />
+                </div>
+                <div>
+                  <h3 style={{ margin: "0 0 6px 0", fontSize: "18px", color: "var(--navy)" }}>Describe what you are experiencing</h3>
+                  <p className="muted" style={{ margin: 0, fontSize: "13.5px", maxWidth: "480px" }}>
+                    Type your symptoms or questions below. Our assistant will provide medical guidance, recommended specialties, and automatically show nearby hospitals visible on Google Maps with direct directions and appointment booking.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              activeChat.messages.map((m: any, idx: number) => (
+                <div key={m.id || idx} className={m.role === "user" ? "chat-bubble-user" : "chat-bubble-assistant"}>
+                  {m.role === "user" ? (
+                    <div>
+                      <p style={{ margin: 0 }}>{m.text}</p>
+                      <time>{m.at ? fmtDateTime(m.at) : ""}</time>
+                    </div>
+                  ) : (
+                    <div className="stack" style={{ gap: "14px" }}>
+                      {m.result?.kind === "urgent" && (
+                        <div className="urgent-card" role="alert" style={{ margin: 0 }}>
+                          <AlertTriangle size={24} />
+                          <div>
+                            <h2>Seek emergency care now</h2>
+                            <p>{m.result.message}</p>
+                            <ul>{m.result.nextSteps?.map((s: string) => <li key={s}>{s}</li>)}</ul>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Clinical Analysis Box */}
+                      {m.result && (
+                        <div className="chat-clinical-box">
+                          {/* 1. Severity & Triage Pill */}
+                          {m.result.severityLabel && (
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+                              <div className={`chat-severity-pill ${m.result.severity || "mild"}`}>
+                                <Activity size={16} />
+                                <span>{m.result.severityLabel}</span>
+                              </div>
+                              {m.result.severityReason && (
+                                <small style={{ color: "var(--muted)", fontSize: "12px", maxWidth: "420px" }}>
+                                  {m.result.severityReason}
+                                </small>
+                              )}
+                            </div>
+                          )}
+
+                          {/* 2. Potential Conditions (What the disease may be) */}
+                          {m.result.potentialDiseases && m.result.potentialDiseases.length > 0 && (
+                            <div className="chat-section-card">
+                              <h4 className="chat-section-title">
+                                <Stethoscope size={16} color="var(--blue)" />
+                                Potential Conditions (What the disease may be)
+                              </h4>
+                              <div className="chat-diseases-grid">
+                                {m.result.potentialDiseases.map((d: any, i: number) => (
+                                  <div key={i} className="chat-disease-card">
+                                    <div className="chat-disease-header">
+                                      <span className="chat-disease-name">{d.name}</span>
+                                      <Badge tone={d.likelihood === "High" ? "good" : d.likelihood === "Moderate" ? "info" : "warn"}>
+                                        {d.likelihood} Likelihood
+                                      </Badge>
+                                    </div>
+                                    <p className="chat-disease-desc">{d.description}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 3. Underlying Causes */}
+                          {m.result.causes && m.result.causes.length > 0 && (
+                            <div className="chat-section-card">
+                              <h4 className="chat-section-title">
+                                <HelpCircle size={16} color="#d97706" />
+                                Likely Causes & Biological Triggers
+                              </h4>
+                              <ul className="chat-causes-list">
+                                {m.result.causes.map((c: string, i: number) => (
+                                  <li key={i}>{c}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* 4. Safe Home Remedies & Self-Care (STRICT NO MEDICATIONS) */}
+                          {m.result.remedies && (
+                            <div className="chat-remedies-card">
+                              <h4 className="chat-section-title" style={{ color: "#166534" }}>
+                                <Sparkles size={16} color="#166534" />
+                                Safe Home Remedies & Self-Care (Non-Medicinal)
+                              </h4>
+
+                              {/* Strict No-Medication Banner */}
+                              <div className="chat-no-meds-banner">
+                                <ShieldAlert size={20} color="#b45309" style={{ flexShrink: 0, marginTop: "2px" }} />
+                                <div>
+                                  <strong>Strict No-Medication Policy</strong>
+                                  <p style={{ margin: "2px 0 0 0", fontSize: "12px" }}>
+                                    {m.result.remedies.strictNoMeds ||
+                                      "This assistant does NOT prescribe medicines, chemical drugs, or antibiotics. Antibiotics cannot treat viral infections and self-medication is unsafe. Always consult a certified doctor before taking any prescription medication."}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Self Care points */}
+                              {m.result.remedies.selfCare && m.result.remedies.selfCare.length > 0 && (
+                                <div>
+                                  <strong style={{ fontSize: "12.5px", color: "#14532d", display: "block", marginBottom: "4px" }}>
+                                    Recommended Home Measures:
+                                  </strong>
+                                  <ul className="chat-remedy-bullets">
+                                    {m.result.remedies.selfCare.map((sc: string, i: number) => (
+                                      <li key={i}>{sc}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+
+                              {/* Lifestyle tips */}
+                              {m.result.remedies.lifestyle && m.result.remedies.lifestyle.length > 0 && (
+                                <div style={{ marginTop: "4px" }}>
+                                  <strong style={{ fontSize: "12.5px", color: "#14532d", display: "block", marginBottom: "4px" }}>
+                                    Lifestyle & Dietary Advice:
+                                  </strong>
+                                  <ul className="chat-remedy-bullets">
+                                    {m.result.remedies.lifestyle.map((ls: string, i: number) => (
+                                      <li key={i}>{ls}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* 5. Red-Flag Warning Signs */}
+                          {m.result.redFlags && m.result.redFlags.length > 0 && (
+                            <div className="chat-red-flags-card">
+                              <h4>
+                                <AlertTriangle size={15} />
+                                When to seek emergency care immediately:
+                              </h4>
+                              <ul className="chat-red-flags-list">
+                                {m.result.redFlags.map((rf: string, i: number) => (
+                                  <li key={i}>{rf}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Fallback context box if older message */}
+                          {!m.result.potentialDiseases && m.result.possibleContext && (
+                            <div className="context-box">
+                              <Badge tone="info">{m.result.contextSource === "ai-generated" ? "Clinical Guidance" : "General Information"}</Badge>
+                              <p style={{ margin: "6px 0 0 0" }}>{m.result.possibleContext}</p>
+                            </div>
+                          )}
+
+                          {/* Questions a doctor may ask */}
+                          {m.result.followUpQuestions && m.result.followUpQuestions.length > 0 && (
+                            <div>
+                              <h4 style={{ margin: "0 0 6px 0", fontSize: "13px", color: "var(--navy)" }}>Questions a doctor may ask:</h4>
+                              <ul className="bullets" style={{ margin: 0, paddingLeft: "18px", fontSize: "12.5px" }}>
+                                {m.result.followUpQuestions.map((q: string, i: number) => <li key={i}>{q}</li>)}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Specialties to consider */}
+                          {m.result.suggestedSpecialties && m.result.suggestedSpecialties.length > 0 && (
+                            <div>
+                              <h4 style={{ margin: "0 0 6px 0", fontSize: "13px", color: "var(--navy)" }}>Specialties to consider:</h4>
+                              <div className="badge-row">
+                                {m.result.suggestedSpecialties.map((s: string) => (
+                                  <button key={s} type="button" className="chip" onClick={() => navigate("/app/doctors?specialty=" + encodeURIComponent(s))}>
+                                    {s}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Hospitals Section with Priority Badges */}
+                      {m.result?.hospitals && m.result.hospitals.length > 0 && (
+                        <div className="chat-hospitals-box">
+                          <div className="chat-hospitals-header">
+                            <h4><Building2 size={16} color="var(--blue)" /> Hospitals nearby (within 20 km)</h4>
+                            <span className="muted" style={{ fontSize: "12px" }}>📍 {locationLabel}</span>
+                          </div>
+
+                          {/* Hospital Tier Recommendation Banner */}
+                          {m.result.hospitalTierReason && (
+                            <div className={`chat-hospital-priority-banner ${m.result.severity === "severe" || m.result.severity === "critical" ? "severe" : ""}`}>
+                              <Info size={16} style={{ flexShrink: 0 }} />
+                              <span>{m.result.hospitalTierReason}</span>
+                            </div>
+                          )}
+
+                          <div className="chat-hospitals-grid">
+                            {m.result.hospitals.map((h: any) => (
+                              <div
+                                key={h.id}
+                                className={`chat-hospital-card ${h.priorityLevel === 1 ? "priority-1" : ""} ${h.priorityTone === "urgent" ? "urgent" : ""}`}
+                              >
+                                <div className="chat-hospital-card-top">
+                                  {/* Priority badge */}
+                                  {h.priorityBadge && (
+                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", marginBottom: "4px" }}>
+                                      <span className={`chat-priority-badge ${h.priorityTone || "info"}`}>
+                                        {h.priorityBadge}
+                                      </span>
+                                      <span className="chat-hospital-tier-tag">{h.tierLabel || "General Hospital"}</span>
+                                    </div>
+                                  )}
+
+                                  <h5 className="chat-hospital-name">{h.name}</h5>
+                                  <p className="chat-hospital-address">{h.address}</p>
+
+                                  {/* Priority reason */}
+                                  {h.priorityReason && (
+                                    <p className="chat-hospital-reason">
+                                      💡 {h.priorityReason}
+                                    </p>
+                                  )}
+
+                                  <div className="chat-hospital-meta" style={{ marginTop: "6px" }}>
+                                    <Badge tone="info">{h.distanceKm !== undefined ? `📍 ${h.distanceKm} km away` : "Nearby"}</Badge>
+                                    {h.rating && <Badge tone="good"><Star size={11} fill="#f59e0b" color="#f59e0b" /> {h.rating}</Badge>}
+                                    {h.doctors && h.doctors.length > 0 ? (
+                                      <Badge tone="good">✅ {h.doctors.length} doctor{h.doctors.length > 1 ? "s" : ""} on platform</Badge>
+                                    ) : (
+                                      <Badge tone="warn">No registered doctors yet</Badge>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="chat-hospital-actions">
+                                  <a
+                                    className="outline-button button-small"
+                                    href={h.directionsUrl || `https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lng}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="Open Google Maps directions in new tab"
+                                  >
+                                    <Navigation size={13} /> Get Direction
+                                  </a>
+                                  <button
+                                    type="button"
+                                    className="button button-small"
+                                    onClick={() => handleBookHospital(h)}
+                                    title="Book an appointment"
+                                  >
+                                    <CalendarDays size={13} /> Book Appointment
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+            {sending && (
+              <div className="chat-bubble-assistant" style={{ maxWidth: "260px" }}>
+                <Loading label="Analyzing symptoms & finding hospitals…" />
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Chat Input Bar */}
+          <form className="chat-input-bar" onSubmit={handleSendMessage}>
+            {error && <Alert kind="error">{error}</Alert>}
+
+            {showSigns && (
+              <div className="chat-urgent-panel">
+                <strong style={{ fontSize: "12.5px", color: "var(--red)" }}>Are you experiencing any urgent red-flag symptoms?</strong>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                  {urgentSigns.map(([id, label]) => (
+                    <label key={id} className="check-row" style={{ fontSize: "12px" }}>
+                      <input
+                        type="checkbox"
+                        checked={signs.includes(id)}
+                        onChange={(e) => setSigns(e.target.checked ? [...signs, id] : signs.filter((s) => s !== id))}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="chat-input-row">
+              <textarea
+                rows={2}
+                value={concern}
+                onChange={(e) => setConcern(e.target.value)}
+                placeholder="Describe your symptoms or ask a follow-up question..."
+                required
+                minLength={2}
+                maxLength={500}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage(e);
+                  }
+                }}
+              />
+              <SubmitButton busy={sending} disabled={!concern.trim()}>
+                <Send size={15} /> Send
+              </SubmitButton>
+            </div>
+
+            <div className="chat-urgent-toggle">
+              <button
+                type="button"
+                className="text-link"
+                style={{ fontSize: "12px", border: 0, background: "none", cursor: "pointer", padding: 0 }}
+                onClick={() => setShowSigns((prev) => !prev)}
+              >
+                {showSigns ? "Hide emergency symptoms checklist" : "⚠️ Report emergency symptoms (chest pain, breathing trouble, etc.)"}
+              </button>
+              <span className="muted" style={{ fontSize: "11px" }}>Press Enter to send · Shift+Enter for new line</span>
+            </div>
+          </form>
+        </main>
+      </div>
+
+      {/* Booking Modal */}
+      {bookingDoctor && (
+        <BookingModal
+          doctor={bookingDoctor}
+          onClose={() => setBookingDoctor(null)}
+          onBooked={(appt) => {
+            setBookingDoctor(null);
+            navigate(`/app/appointments?chat=${appt?.id ?? ""}`);
+          }}
+        />
+      )}
+
+      {/* Hospital Notice / Auth Required Modal */}
+      {hospitalNotice && (
+        <Modal
+          title={hospitalNotice.reason === "auth" ? "Account Required" : `Book Appointment at ${hospitalNotice.hospital.name}`}
+          onClose={() => setHospitalNotice(null)}
+        >
+          {hospitalNotice.reason === "auth" ? (
+            <div className="stack">
+              <Alert kind="warn">
+                To book an appointment at <strong>{hospitalNotice.hospital.name}</strong>, please register as a patient or sign in to your account.
+              </Alert>
+              <p>Registration takes less than a minute and lets you schedule appointments, view prescriptions, and keep your health records.</p>
+              <div className="badge-row" style={{ marginTop: "10px" }}>
+                <Link to="/register" className="button">
+                  <UserPlus size={15} /> Register as Patient
+                </Link>
+                <Link to="/login" className="outline-button">
+                  Sign in
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <div className="stack">
+              <p>
+                Online direct slots are fulfilled through our verified doctors. <strong>{hospitalNotice.hospital.name}</strong> is visible and mapped directly on Google Maps.
+              </p>
+              <div className="quote" style={{ borderRadius: "8px" }}>
+                <strong>{hospitalNotice.hospital.name}</strong>
+                <p style={{ fontSize: "13px", color: "var(--muted)", margin: "4px 0" }}>{hospitalNotice.hospital.address}</p>
+                {hospitalNotice.hospital.phone && <p style={{ fontSize: "13px" }}>Direct Phone: <strong>{hospitalNotice.hospital.phone}</strong></p>}
+              </div>
+              <div className="badge-row" style={{ marginTop: "12px" }}>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => {
+                    setHospitalNotice(null);
+                    navigate("/app/doctors");
+                  }}
+                >
+                  <Stethoscope size={15} /> Find Available Verified Doctors
+                </button>
+                <a
+                  className="outline-button"
+                  href={hospitalNotice.hospital.directionsUrl || `https://www.google.com/maps/dir/?api=1&destination=${hospitalNotice.hospital.lat},${hospitalNotice.hospital.lng}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <Navigation size={15} /> Open in Google Maps
+                </a>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Doctors ---------- */
+export function PatientDoctors({ search }: { search: string }) {
+  const specialty = new URLSearchParams(search).get("specialty") ?? "";
+  return <DoctorSearch initialSpecialty={specialty} onBooked={(appt) => navigate(`/app/appointments?chat=${appt?.id ?? ""}`)} />;
+}
+
+/* ---------- Appointments ---------- */
+export function Appointments() {
+  const list = useLoad(() => get<{ appointments: Appt[] }>("/appointments"), []);
+  const [chatApptId, setChatApptId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("chat"));
+  const [meetApptId, setMeetApptId] = useState<string | null>(null);
+  const action = useAction();
+  const cancel = async (id: string) => { if (confirm("Cancel this appointment?") && await action.run(() => patch(`/appointments/${id}`, { status: "cancelled" }))) list.reload(); };
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("chat");
+    if (q) setChatApptId(q);
+  }, []);
+
+  if (list.loading) return <Loading />;
+  if (list.error) return <Alert kind="error">{list.error}</Alert>;
+  const items = [...list.data!.appointments].reverse();
+  return (
+    <Panel title="Your appointments" action={<Link to="/app/doctors" className="outline-button">Book new</Link>}>
+      {action.error && <Alert kind="error">{action.error}</Alert>}
+      {items.length === 0 ? <Empty icon={<CalendarDays size={22} />} title="No appointments yet" text="Booked consultations and their history appear here." /> :
+        <ul className="list">{items.map((a) => (
+          <li key={a.id}>
+            <div>
+              <strong>{a.doctorName}</strong>
+              <small>{fmtDateTime(a.start)} · {a.durationMin} min · {a.mode === "online" ? "🎥 Online" : "In person"}</small>
+              <small>Reason: {a.reason}</small>
+              {a.mode === "online" && a.status === "confirmed" && (a as any).videoNote && <small>{(a as any).videoNote}</small>}
+              {a.mode === "online" && a.status === "confirmed" && (a as any).googleMeetUrl && (
+                <small className="meet-link-hint">✅ Google Meet session ready — click Meet Lobby to join</small>
+              )}
+            </div>
+            <div className="row-actions">
+              <Badge tone={statusTone(a.status)}>{humanize(a.status)}</Badge>
+              <button className="button button-small" onClick={() => setChatApptId(a.id)}>
+                <MessageSquare size={14} /> Consultation Chat
+              </button>
+              {a.mode === "online" && ["confirmed", "completed"].includes(a.status) && (
+                <button className="button button-small" onClick={() => setMeetApptId(a.id)}>
+                  <Video size={14} /> Meet Lobby
+                </button>
+              )}
+              {a.status === "confirmed" && <button className="outline-button" onClick={() => cancel(a.id)}>Cancel</button>}
+            </div>
+          </li>
+        ))}
+        </ul>}
+      {chatApptId && (
+        <ConsultationChatModal
+          appointmentId={chatApptId}
+          onClose={() => {
+            setChatApptId(null);
+            if (window.location.search.includes("chat=")) {
+              window.history.replaceState({}, "", "/app/appointments");
+            }
+          }}
+        />
+      )}
+      {meetApptId && (
+        <GoogleMeetLobbyModal
+          appointmentId={meetApptId}
+          onClose={() => setMeetApptId(null)}
+        />
+      )}
+    </Panel>
+  );
+}
+
+/* ---------- Health ---------- */
+function SeverityChart({ logs }: { logs: Array<{ date: string; severity: number }> }) {
+  const sorted = [...logs].sort((a, b) => a.date.localeCompare(b.date)).slice(-20);
+  if (sorted.length < 2) return <p className="muted">Add at least two entries for this symptom to see a chart.</p>;
+  const w = 480, h = 150, pad = 24;
+  const x = (i: number) => pad + (i * (w - pad * 2)) / (sorted.length - 1);
+  const y = (v: number) => h - pad - ((v - 1) * (h - pad * 2)) / 9;
+  return (
+    <figure className="chart">
+      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`Severity over time: ${sorted.map((s) => `${fmtDate(s.date)} ${s.severity}`).join(", ")}`}>
+        {[1, 5, 10].map((v) => <g key={v}><line x1={pad} x2={w - pad} y1={y(v)} y2={y(v)} className="grid" /><text x={4} y={y(v) + 4}>{v}</text></g>)}
+        <polyline points={sorted.map((s, i) => `${x(i)},${y(s.severity)}`).join(" ")} className="line" />
+        {sorted.map((s, i) => <circle key={i} cx={x(i)} cy={y(s.severity)} r={4} className="dot"><title>{fmtDate(s.date)}: {s.severity}/10</title></circle>)}
+      </svg>
+      <figcaption>Patient-reported severity (1–10) over time.</figcaption>
+    </figure>
+  );
+}
+
+export function Health() {
+  const [tab, setTab] = useState<"timeline" | "records" | "symptoms">("timeline");
+  return (
+    <div className="stack-lg">
+      <div className="tabs" role="tablist">{(["timeline", "records", "symptoms"] as const).map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t === "symptoms" ? "Symptom log" : humanize(t)}</button>)}</div>
+      {tab === "timeline" && <Timeline />}
+      {tab === "records" && <Records />}
+      {tab === "symptoms" && <Symptoms />}
+    </div>
+  );
+}
+
+function Timeline() {
+  const data = useLoad(() => get<{ timeline: Array<{ id: string; date: string; type: string; title: string; detail?: string; source: string }> }>("/timeline"), []);
+  if (data.loading) return <Loading />;
+  if (data.error) return <Alert kind="error">{data.error}</Alert>;
+  return (
+    <Panel title="Health timeline" kicker="Newest first">
+      {data.data!.timeline.length === 0 ? <Empty title="Your timeline is empty" text="Add records, log symptoms, or book a consultation to build it." /> :
+        <ol className="timeline">{data.data!.timeline.map((t) => <li key={t.type + t.id}><time>{fmtDate(t.date)}</time><div><Badge>{humanize(t.type)}</Badge><strong>{t.title}</strong>{t.detail && <p>{t.detail}</p>}<small>Source: {t.source}</small></div></li>)}</ol>}
+    </Panel>
+  );
+}
+
+const toBase64 = (file: File) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+  reader.onerror = () => reject(new Error("read failed"));
+  reader.readAsDataURL(file);
+});
+
+function Records() {
+  const list = useLoad(() => get<{ records: any[] }>("/records"), []);
+  const [open, setOpen] = useState(false);
+  const action = useAction();
+  const remove = async (id: string) => { if (confirm("Delete this record?") && await action.run(() => del(`/records/${id}`))) list.reload(); };
+  return (
+    <Panel title="Medical records" action={<button className="button button-small" onClick={() => setOpen(true)}><Upload size={15} /> Add record</button>}>
+      {action.error && <Alert kind="error">{action.error}</Alert>}
+      {list.loading ? <Loading /> : list.error ? <Alert kind="error">{list.error}</Alert> : list.data!.records.length === 0 ? <Empty icon={<FileText size={22} />} title="No records yet" text="Add conditions, allergies, lab results or upload a report (PDF, PNG or JPEG up to 2 MB)." /> :
+        <ul className="list">{list.data!.records.map((r) => (
+          <li key={r.id}><div><strong>{r.title}</strong><small>{humanize(r.type)} · {fmtDate(r.date)}{r.type === "lab" && r.value ? ` · ${r.value} ${r.unit ?? ""}${r.refRange ? ` (ref ${r.refRange})` : ""}` : ""}</small>{r.notes && <small>{r.notes}</small>}<small>Entered by you · not clinically verified</small></div>
+            <div className="row-actions">{r.file && <a className="outline-button" href={`/api/records/${r.id}/file`}><Download size={14} /> {r.file.name}</a>}<button className="icon-btn" aria-label={`Delete ${r.title}`} onClick={() => remove(r.id)}><Trash2 size={15} /></button></div></li>))}</ul>}
+      {open && <RecordModal onClose={() => setOpen(false)} onSaved={() => { setOpen(false); list.reload(); }} />}
+    </Panel>
+  );
+}
+
+function RecordModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState({ type: "report", title: "", date: new Date().toISOString().slice(0, 10), value: "", unit: "", refRange: "", notes: "" });
+  const [file, setFile] = useState<File | null>(null);
+  const action = useAction();
+  const set = (k: string) => (e: React.ChangeEvent<any>) => setF({ ...f, [k]: e.target.value });
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (file && !["application/pdf", "image/png", "image/jpeg"].includes(file.type)) return alert("Please choose a PDF, PNG or JPEG file.");
+    if (file && file.size > 2 * 1024 * 1024) return alert("File must be under 2 MB.");
+    const body: any = { type: f.type, title: f.title, date: f.date };
+    for (const k of ["value", "unit", "refRange", "notes"] as const) if (f[k]) body[k] = f[k];
+    if (file) body.file = { name: file.name, mime: file.type, data: await toBase64(file) };
+    if (await action.run(() => post("/records", body))) onSaved();
+  };
+  return (
+    <Modal title="Add a record" onClose={onClose}>
+      <form className="stack" onSubmit={submit}>
+        <Field label="Type"><select value={f.type} onChange={set("type")}><option value="report">Report</option><option value="lab">Lab result</option><option value="condition">Condition</option><option value="allergy">Allergy</option><option value="note">Note</option></select></Field>
+        <Field label="Title"><input value={f.title} onChange={set("title")} required minLength={2} /></Field>
+        <Field label="Date"><input type="date" value={f.date} onChange={set("date")} required max={new Date().toISOString().slice(0, 10)} /></Field>
+        {f.type === "lab" && <div className="grid-3"><Field label="Value"><input value={f.value} onChange={set("value")} /></Field><Field label="Unit"><input value={f.unit} onChange={set("unit")} /></Field><Field label="Reference range"><input value={f.refRange} onChange={set("refRange")} /></Field></div>}
+        <Field label="Notes"><textarea rows={2} value={f.notes} onChange={set("notes")} maxLength={1000} /></Field>
+        <Field label="Attach original file (optional)" hint="PDF, PNG or JPEG, up to 2 MB. The original is stored unchanged; no values are extracted automatically."><input type="file" accept="application/pdf,image/png,image/jpeg" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
+        {action.error && <Alert kind="error">{action.error}</Alert>}
+        <SubmitButton busy={action.busy}>Save record</SubmitButton>
+      </form>
+    </Modal>
+  );
+}
+
+function Symptoms() {
+  const logs = useLoad(() => get<{ logs: any[] }>("/symptom-logs"), []);
+  const alerts = useLoad(() => get<{ alerts: Array<{ level: string; message: string; rule: string }>; note: string }>("/health-alerts"), []);
+  const [f, setF] = useState({ symptom: "", severity: 3, notes: "", label: "", value: "", unit: "" });
+  const [selected, setSelected] = useState("");
+  const action = useAction();
+  const names = useMemo(() => [...new Set((logs.data?.logs ?? []).map((l) => l.symptom.toLowerCase()))], [logs.data]);
+  useEffect(() => { if (!selected && names[0]) setSelected(names[0]); }, [names, selected]);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const body: any = { symptom: f.symptom, severity: Number(f.severity) };
+    if (f.notes) body.notes = f.notes;
+    if (f.label && f.value !== "" && !Number.isNaN(Number(f.value))) body.measurement = { label: f.label, value: Number(f.value), unit: f.unit };
+    const res = await action.run(() => post<{ urgentGuidance: boolean }>("/symptom-logs", body));
+    if (res) { setF({ ...f, symptom: "", notes: "", label: "", value: "", unit: "" }); logs.reload(); alerts.reload(); }
+  };
+  const remove = async (id: string) => { if (await action.run(() => del(`/symptom-logs/${id}`))) { logs.reload(); alerts.reload(); } };
+  return (
+    <div className="grid-2">
+      <Panel title="Log a symptom">
+        <form className="stack" onSubmit={submit}>
+          <Field label="Symptom"><input value={f.symptom} onChange={(e) => setF({ ...f, symptom: e.target.value })} required minLength={2} maxLength={100} /></Field>
+          <Field label={`Severity: ${f.severity}/10`}><input type="range" min={1} max={10} value={f.severity} onChange={(e) => setF({ ...f, severity: Number(e.target.value) })} /></Field>
+          {f.severity >= 9 && <Alert kind="error">If this is severe or sudden, seek urgent medical care now rather than waiting.</Alert>}
+          <Field label="Notes"><textarea rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} maxLength={500} /></Field>
+          <div className="grid-3"><Field label="Measurement (optional)"><input placeholder="e.g. Temperature" value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} /></Field><Field label="Value"><input inputMode="decimal" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} /></Field><Field label="Unit"><input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} /></Field></div>
+          {action.error && <Alert kind="error">{action.error}</Alert>}
+          <SubmitButton busy={action.busy}>Add entry</SubmitButton>
+        </form>
+      </Panel>
+      <Panel title="Trends">
+        {alerts.data?.alerts.map((a, i) => <Alert key={i} kind={a.level === "urgent" ? "error" : "warn"}>{a.message} <small>Rule: {a.rule}</small></Alert>)}
+        {alerts.data && <small className="muted">{alerts.data.note}</small>}
+        {logs.loading ? <Loading /> : names.length === 0 ? <Empty title="No entries yet" text="Log symptoms over time to see how they change." /> : <>
+          <Field label="Symptom"><select value={selected} onChange={(e) => setSelected(e.target.value)}>{names.map((n) => <option key={n}>{n}</option>)}</select></Field>
+          <SeverityChart logs={logs.data!.logs.filter((l) => l.symptom.toLowerCase() === selected)} />
+        </>}
+      </Panel>
+      <Panel title="Entries" className="span-2">
+        {logs.data?.logs.length ? <ul className="list">{logs.data.logs.slice(0, 30).map((l) => <li key={l.id}><div><strong>{l.symptom} · {l.severity}/10</strong><small>{fmtDateTime(l.date)}{l.measurement ? ` · ${l.measurement.label}: ${l.measurement.value} ${l.measurement.unit}` : ""}</small>{l.notes && <small>{l.notes}</small>}</div><button className="icon-btn" aria-label="Delete entry" onClick={() => remove(l.id)}><Trash2 size={15} /></button></li>)}</ul> : <p className="muted">Nothing logged.</p>}
+      </Panel>
+    </div>
+  );
+}
+
+/* ---------- Medicines ---------- */
+type Dose = { key: string; rxId: string; itemIndex: number; name: string; detail: string; at: Date; status: "taken" | "skipped" | "due" | "upcoming" | "unacknowledged" };
+const GRACE_MS = 60 * 60_000;
+const SNOOZE_KEY = "sd_snooze";
+
+function buildDoses(prescriptions: Rx[], logs: DoseLog[], snoozed: Record<string, number>): Dose[] {
+  const doses: Dose[] = [];
+  const now = Date.now();
+  for (const rx of prescriptions.filter((p) => p.status === "active")) {
+    rx.items.forEach((item, itemIndex) => {
+      const from = new Date(rx.issuedAt).getTime(), to = from + item.durationDays * 86_400_000;
+      for (let d = -7; d <= 1; d++) {
+        for (const time of item.times) {
+          const [hh, mm] = time.split(":").map(Number);
+          const at = new Date(); at.setDate(at.getDate() + d); at.setHours(hh, mm, 0, 0);
+          if (at.getTime() < from || at.getTime() >= to) continue;
+          const key = `${rx.id}|${itemIndex}|${at.toISOString()}`;
+          const log = logs.find((l) => l.prescriptionId === rx.id && l.itemIndex === itemIndex && new Date(l.scheduledAt).getTime() === at.getTime());
+          const status: Dose["status"] = log ? log.status : at.getTime() > now ? "upcoming" : now - at.getTime() > GRACE_MS && !(snoozed[key] > now) ? "unacknowledged" : "due";
+          doses.push({ key, rxId: rx.id, itemIndex, name: item.name, detail: [item.dose, item.route, item.timing].filter(Boolean).join(" · "), at, status });
+        }
+      }
+    });
+  }
+  return doses.sort((a, b) => a.at.getTime() - b.at.getTime());
+}
+
+export function Medicines() {
+  const { user } = useAuth();
+  const rx = useLoad(() => get<{ prescriptions: Rx[] }>("/prescriptions"), []);
+  const logs = useLoad(() => get<{ doseLogs: DoseLog[] }>("/dose-logs"), []);
+  const [tab, setTab] = useState<"reminders" | "prescriptions" | "check">("reminders");
+  const [snoozed, setSnoozed] = useState<Record<string, number>>(() => { try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}"); } catch { return {}; } });
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 30_000); return () => clearInterval(t); }, []);
+
+  const doses = useMemo(() => buildDoses(rx.data?.prescriptions ?? [], logs.data?.doseLogs ?? [], snoozed), [rx.data, logs.data, snoozed, Date.now() / 30_000 | 0]);
+
+  useEffect(() => {
+    if (!user?.preferences.browserNotifications || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const notified = new Set<string>(JSON.parse(sessionStorage.getItem("sd_notified") ?? "[]"));
+    for (const dose of doses.filter((d) => d.status === "due" && !notified.has(d.key))) {
+      new Notification("Medicine reminder", { body: `${dose.name} (${dose.detail}) was scheduled for ${dose.at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` });
+      notified.add(dose.key);
+    }
+    sessionStorage.setItem("sd_notified", JSON.stringify([...notified]));
+  }, [doses, user]);
+
+  const snooze = (key: string) => { const next = { ...snoozed, [key]: Date.now() + 10 * 60_000 }; setSnoozed(next); localStorage.setItem(SNOOZE_KEY, JSON.stringify(next)); };
+  const action = useAction();
+  const record = async (dose: Dose, status: "taken" | "skipped") => { if (await action.run(() => post("/dose-logs", { prescriptionId: dose.rxId, itemIndex: dose.itemIndex, scheduledAt: dose.at.toISOString(), status }))) logs.reload(); };
+
+  const today = new Date().toDateString();
+  const todays = doses.filter((d) => d.at.toDateString() === today);
+  const history = doses.filter((d) => d.at.getTime() <= Date.now() && !todays.includes(d)).reverse();
+  const unack = doses.filter((d) => d.status === "unacknowledged");
+
+  return (
+    <div className="stack-lg">
+      <div className="tabs" role="tablist">{(["reminders", "prescriptions", "check"] as const).map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t === "check" ? "Medicine check" : humanize(t)}</button>)}</div>
+      {tab === "reminders" && (rx.loading || logs.loading ? <Loading /> : <>
+        <NotificationSettings />
+        {action.error && <Alert kind="error">{action.error}</Alert>}
+        {unack.length > 0 && <Alert kind="warn">{unack.length} dose{unack.length > 1 ? "s were" : " was"} not acknowledged. Don't double up on a missed dose. Ask your doctor or pharmacist what to do.</Alert>}
+        <Panel title="Today" kicker="From your doctor's prescription">
+          {todays.length === 0 ? <Empty icon={<Pill size={22} />} title="No doses today" text="Reminders are created only from active prescriptions issued by a verified doctor." /> :
+            <ul className="list">{todays.map((d) => <DoseRow key={d.key} dose={d} onTaken={() => record(d, "taken")} onSkip={() => record(d, "skipped")} onSnooze={() => snooze(d.key)} />)}</ul>}
+        </Panel>
+        <Panel title="Recent history (7 days)">
+          {history.length === 0 ? <p className="muted">No past doses yet.</p> : <ul className="list">{history.slice(0, 40).map((d) => <DoseRow key={d.key} dose={d} compact onTaken={() => record(d, "taken")} onSkip={() => record(d, "skipped")} onSnooze={() => undefined} />)}</ul>}
+        </Panel></>)}
+      {tab === "prescriptions" && <Prescriptions rx={rx} />}
+      {tab === "check" && <MedicineCheck />}
+    </div>
+  );
+}
+
+function DoseRow({ dose, compact, onTaken, onSkip, onSnooze }: { dose: Dose; compact?: boolean; onTaken: () => void; onSkip: () => void; onSnooze: () => void }) {
+  const open = dose.status === "due" || dose.status === "unacknowledged";
+  return (
+    <li><div><strong>{dose.name}</strong><small>{dose.at.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} · {dose.detail}</small></div>
+      <div className="row-actions">
+        <Badge tone={statusTone(dose.status)}>{dose.status === "unacknowledged" ? "Not acknowledged" : humanize(dose.status)}</Badge>
+        {open && <><button className="button button-small" onClick={onTaken}>Taken</button>{!compact && dose.status === "due" && <button className="outline-button" onClick={onSnooze}>Snooze 10 min</button>}<button className="outline-button" onClick={onSkip}>Skipped</button></>}
+      </div></li>
+  );
+}
+
+function NotificationSettings() {
+  const { user, refresh } = useAuth();
+  const action = useAction();
+  const enable = async () => {
+    if (typeof Notification === "undefined") return;
+    const perm = await Notification.requestPermission();
+    await action.run(() => put("/me/preferences", { browserNotifications: perm === "granted" }));
+    await refresh();
+  };
+  const on = user?.preferences.browserNotifications && typeof Notification !== "undefined" && Notification.permission === "granted";
+  return (
+    <Alert>
+      <strong>Reminders work while Smart Diagno is open.</strong> Browser notifications can't be guaranteed in the background — browsers and devices may block or delay them, and push, SMS and email are not configured. Don't rely on this alone.{" "}
+      {on ? <Badge tone="good">Browser notifications on</Badge> : typeof Notification === "undefined" ? <Badge>Not supported by this browser</Badge> : <button className="outline-button" onClick={enable}><Bell size={14} /> Enable browser notifications</button>}
+      {action.error && <small> {action.error}</small>}
+    </Alert>
+  );
+}
+
+function Prescriptions({ rx }: { rx: ReturnType<typeof useLoad<{ prescriptions: Rx[] }>> }) {
+  const [sharing, setSharing] = useState<Rx | null>(null);
+  if (rx.loading) return <Loading />;
+  if (rx.error) return <Alert kind="error">{rx.error}</Alert>;
+  const list = rx.data!.prescriptions;
+  return (
+    <Panel title="Prescriptions" kicker="Issued by verified doctors">
+      {list.length === 0 ? <Empty icon={<FileText size={22} />} title="No prescriptions" text="Only a verified doctor can issue a prescription after a consultation." /> :
+        <ul className="rx-list">{list.map((p) => (
+          <li key={p.id} className="rx-card"><header><div><strong>{p.id}</strong><small>{p.doctorName} · {fmtDate(p.issuedAt)}</small></div><Badge tone={statusTone(p.status)}>{humanize(p.status)}</Badge></header>
+            <ul className="bullets">{p.items.map((i, n) => <li key={n}><strong>{i.name}</strong> — {i.dose}, {i.route}, {i.frequency}{i.timing ? `, ${i.timing}` : ""}, {i.durationDays} days{i.instructions ? `. ${i.instructions}` : ""}</li>)}</ul>
+            {p.notes && <p>{p.notes}</p>}{p.status === "revoked" && <Alert kind="error">Revoked{p.revokeReason ? `: ${p.revokeReason}` : ""}. Contact your doctor; don't change treatment on your own.</Alert>}
+            <div className="row-actions"><Link to={p.verifyPath} className="outline-button">Verification page</Link>{p.status === "active" && <button className="button button-small" onClick={() => setSharing(p)}><Send size={14} /> Share with pharmacy</button>}</div></li>))}</ul>}
+      {sharing && <ShareModal rx={sharing} onClose={() => setSharing(null)} onDone={() => { setSharing(null); navigate("/app/orders"); }} />}
+    </Panel>
+  );
+}
+
+function ShareModal({ rx, onClose, onDone }: { rx: Rx; onClose: () => void; onDone: () => void }) {
+  const pharmacies = useLoad(() => get<{ pharmacies: any[] }>("/pharmacies"), []);
+  const [pharmacyId, setPharmacyId] = useState("");
+  const [address, setAddress] = useState("");
+  const [consent, setConsent] = useState(false);
+  const action = useAction();
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (await action.run(() => post(`/prescriptions/${rx.id}/share`, { pharmacyId, consent: true, ...(address ? { deliveryAddress: address } : {}) }))) onDone();
+  };
+  return (
+    <Modal title={`Share ${rx.id}`} onClose={onClose}>
+      <form className="stack" onSubmit={submit}>
+        {pharmacies.loading ? <Loading /> : !pharmacies.data ? <Alert kind="error">{pharmacies.error ?? "Couldn't load pharmacies."}</Alert> : pharmacies.data.pharmacies.length === 0 ? <Alert>No verified pharmacies are available yet.</Alert> :
+          <fieldset className="slot-grid"><legend>Choose a verified pharmacy</legend>{pharmacies.data.pharmacies.map((p) => (
+            <label key={p.id} className={pharmacyId === p.id ? "selected" : ""}><input type="radio" name="ph" checked={pharmacyId === p.id} onChange={() => setPharmacyId(p.id)} /><span>{p.name}</span><small>{p.address} · {p.hours || "Hours not listed"} · {p.delivery ? "Delivers" : "Pickup only"}</small>
+              {p.lat != null && p.lng != null && <a href={`https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}><Navigation size={12} /> Directions</a>}</label>))}</fieldset>}
+        <Field label="Delivery address (optional)"><input value={address} onChange={(e) => setAddress(e.target.value)} maxLength={250} /></Field>
+        <label className="check-row consent"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} /><span>I agree to share this prescription (medicines and doctor details) and my first name with the selected pharmacy. They can't see the rest of my health record.</span></label>
+        {action.error && <Alert kind="error">{action.error}</Alert>}
+        <SubmitButton busy={action.busy} disabled={!consent || !pharmacyId}>Share prescription</SubmitButton>
+      </form>
+    </Modal>
+  );
+}
+
+function MedicineCheck() {
+  const [f, setF] = useState({ productName: "", batchNo: "", barcode: "" });
+  const [result, setResult] = useState<any>(null);
+  const action = useAction();
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const body: any = { productName: f.productName };
+    if (f.batchNo) body.batchNo = f.batchNo;
+    if (f.barcode) body.barcode = f.barcode;
+    const r = await action.run(() => post("/medicine-verification", body));
+    if (r) setResult(r);
+  };
+  return (
+    <Panel title="Medicine information check" kicker="Not an authenticity guarantee">
+      <Alert>No manufacturer or regulator system is connected. This only compares the name with listings from verified pharmacies and can't confirm a product is genuine.</Alert>
+      <form className="stack" onSubmit={submit}>
+        <Field label="Product name"><input value={f.productName} onChange={(e) => setF({ ...f, productName: e.target.value })} required minLength={2} /></Field>
+        <div className="grid-2"><Field label="Batch / lot number (optional)"><input value={f.batchNo} onChange={(e) => setF({ ...f, batchNo: e.target.value })} /></Field><Field label="Barcode (optional)"><input value={f.barcode} onChange={(e) => setF({ ...f, barcode: e.target.value })} /></Field></div>
+        {action.error && <Alert kind="error">{action.error}</Alert>}
+        <SubmitButton busy={action.busy}>Check</SubmitButton>
+      </form>
+      {result && <Alert kind={result.status === "details_matched" ? "info" : "warn"}><strong>{result.label}</strong><br />{result.explanation}</Alert>}
+    </Panel>
+  );
+}
+
+/* ---------- Orders ---------- */
+export function Orders() {
+  const list = useLoad(() => get<{ orders: any[] }>("/orders"), []);
+  const action = useAction();
+  const act = async (id: string, a: string) => { if (await action.run(() => patch(`/orders/${id}/patient`, { action: a }))) list.reload(); };
+  if (list.loading) return <Loading />;
+  if (list.error) return <Alert kind="error">{list.error}</Alert>;
+  return (
+    <Panel title="Pharmacy orders">
+      <Alert>Payment is not processed online and live delivery tracking isn't available. Status updates come from the pharmacy.</Alert>
+      {action.error && <Alert kind="error">{action.error}</Alert>}
+      {list.data!.orders.length === 0 ? <Empty title="No orders" text="Share an active prescription with a verified pharmacy from the Medicines page." action={<Link to="/app/medicines" className="outline-button">Go to Medicines</Link>} /> :
+        <ul className="rx-list">{list.data!.orders.map((o) => (
+          <li key={o.id} className="rx-card"><header><div><strong>{o.pharmacyName}</strong><small>Prescription {o.prescription?.id}</small></div><Badge tone={statusTone(o.status)}>{humanize(o.status)}</Badge></header>
+            {o.quote && <div className="quote"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit</th></tr></thead><tbody>{o.quote.items.map((i: any, n: number) => <tr key={n}><td>{i.name}</td><td>{i.qty}</td><td>{i.unitPrice}</td></tr>)}</tbody></table><p>Delivery: {o.quote.deliveryFee} · <strong>Total: {o.quote.total}</strong></p>{o.quote.note && <small>{o.quote.note}</small>}</div>}
+            <ol className="status-trail">{o.history.map((h: any, n: number) => <li key={n}>{humanize(h.status)} <small>{fmtDateTime(h.at)}{h.note ? ` — ${h.note}` : ""}</small></li>)}</ol>
+            <div className="row-actions">
+              {o.status === "awaiting_confirmation" && <><button className="button button-small" onClick={() => act(o.id, "confirm")}>Confirm quotation</button><button className="outline-button" onClick={() => act(o.id, "decline")}>Decline</button></>}
+              {["received", "under_review", "confirmed", "preparing"].includes(o.status) && <button className="outline-button" onClick={() => confirm("Cancel this order?") && act(o.id, "cancel")}>Cancel order</button>}
+            </div></li>))}</ul>}
+    </Panel>
+  );
+}
+
+/* ---------- Settings ---------- */
+export function PatientSettings() {
+  const { user, logout } = useAuth();
+  const [password, setPassword] = useState("");
+  const [showDelPassword, setShowDelPassword] = useState(false);
+  const [c, setC] = useState({ subject: "", details: "" });
+  const del1 = useAction(), exp = useAction(), cmp = useAction();
+  const exportData = async () => {
+    const data = await exp.run(() => get("/me/export"));
+    if (!data) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a"); a.href = url; a.download = "smart-diagno-export.json"; a.click(); URL.revokeObjectURL(url);
+  };
+  const remove = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!confirm("This permanently deletes your account and health data. Continue?")) return;
+    if (await del1.run(() => del("/me", { password }))) { await logout(); navigate("/"); }
+  };
+  const complain = async (e: React.FormEvent) => { e.preventDefault(); if (await cmp.run(() => post("/complaints", c), "Thanks — your report was sent to the administrators.")) setC({ subject: "", details: "" }); };
+  return (
+    <div className="grid-2">
+      <Panel title="Account"><dl className="kv"><div><dt>Name</dt><dd>{user?.name}</dd></div><div><dt>Email</dt><dd>{user?.email}</dd></div><div><dt>Sign-in</dt><dd>{user?.authMethod}</dd></div></dl></Panel>
+      <Panel title="Your data">
+        <p>Download everything we hold about you as JSON (uploaded files excluded).</p>
+        {exp.error && <Alert kind="error">{exp.error}</Alert>}
+        <button className="outline-button" onClick={exportData}><Download size={15} /> Export my data</button>
+        <hr />
+        <form className="stack" onSubmit={remove}>
+          <strong>Delete account</strong>
+          <Field label="Confirm with your password" hint="Google-only accounts can leave this blank.">
+            <div className="password-input-wrapper">
+              <input
+                type={showDelPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                className="password-toggle-btn"
+                onClick={() => setShowDelPassword((v) => !v)}
+                title={showDelPassword ? "Hide password" : "Show password"}
+                aria-label={showDelPassword ? "Hide password" : "Show password"}
+              >
+                {showDelPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </Field>
+          {del1.error && <Alert kind="error">{del1.error}</Alert>}
+          <SubmitButton busy={del1.busy} className="button danger">Delete my account</SubmitButton>
+        </form>
+      </Panel>
+      <Panel title="Report a problem" className="span-2">
+        <form className="stack" onSubmit={complain}>
+          <Field label="Subject"><input value={c.subject} onChange={(e) => setC({ ...c, subject: e.target.value })} required minLength={3} maxLength={120} /></Field>
+          <Field label="Details"><textarea rows={4} value={c.details} onChange={(e) => setC({ ...c, details: e.target.value })} required minLength={10} maxLength={1500} /></Field>
+          {cmp.error && <Alert kind="error">{cmp.error}</Alert>}{cmp.done && <Alert kind="success">{cmp.done}</Alert>}
+          <SubmitButton busy={cmp.busy}>Send report</SubmitButton>
+        </form>
+      </Panel>
+    </div>
+  );
+}
