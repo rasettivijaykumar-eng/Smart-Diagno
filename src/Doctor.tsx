@@ -407,7 +407,7 @@ function HistoryModal({ patientId, onClose }: { patientId: string; onClose: () =
   );
 }
 
-const blankItem = { name: "", dose: "", route: "Oral", frequency: "", timing: "", durationDays: 5, times: "08:00", instructions: "" };
+const blankItem = { name: "", dose: "", route: "Oral", frequency: "", timing: "", color: "", durationDays: 5, times: "08:00", instructions: "" };
 
 export function PrescribeModal({ appointment, existing, onClose, onDone }: { appointment?: any; existing?: any; onClose: () => void; onDone?: () => void }) {
   const [items, setItems] = useState<any[]>(existing ? existing.items.map((i: any) => ({ ...blankItem, ...i, times: i.times.join(", ") })) : [{ ...blankItem }]);
@@ -419,7 +419,7 @@ export function PrescribeModal({ appointment, existing, onClose, onDone }: { app
     e.preventDefault();
     const payload = items.map((i) => ({
       name: i.name, dose: i.dose, route: i.route, frequency: i.frequency, durationDays: Number(i.durationDays),
-      times: String(i.times).split(/[,\s]+/).filter(Boolean), ...(i.timing ? { timing: i.timing } : {}), ...(i.instructions ? { instructions: i.instructions } : {}),
+      times: String(i.times).split(/[,\s]+/).filter(Boolean),       ...(i.timing ? { timing: i.timing } : {}), ...(i.color ? { color: i.color } : {}), ...(i.instructions ? { instructions: i.instructions } : {}),
     }));
     const body = existing ? { items: payload, notes } : { appointmentId: appointment.id, items: payload, notes };
     const res = await action.run(() => (existing ? put<{ prescription: any }>(`/prescriptions/${existing.id}`, body) : post<{ prescription: any }>("/prescriptions", body)));
@@ -436,6 +436,7 @@ export function PrescribeModal({ appointment, existing, onClose, onDone }: { app
                 <Field label="Name"><input value={it.name} onChange={(e) => upd(n, "name", e.target.value)} required /></Field><Field label="Dose"><input value={it.dose} onChange={(e) => upd(n, "dose", e.target.value)} required /></Field>
                 <Field label="Route"><input value={it.route} onChange={(e) => upd(n, "route", e.target.value)} required /></Field><Field label="Frequency"><input value={it.frequency} onChange={(e) => upd(n, "frequency", e.target.value)} placeholder="e.g. twice daily" required /></Field>
                 <Field label="Timing"><input value={it.timing} onChange={(e) => upd(n, "timing", e.target.value)} placeholder="e.g. after food" /></Field><Field label="Duration (days)"><input type="number" min={1} max={365} value={it.durationDays} onChange={(e) => upd(n, "durationDays", e.target.value)} required /></Field>
+                <Field label="Tablet color (optional)"><input value={it.color} onChange={(e) => upd(n, "color", e.target.value)} maxLength={40} placeholder="e.g. white" /></Field>
                 <Field label="Reminder times (24h, comma separated)"><input value={it.times} onChange={(e) => upd(n, "times", e.target.value)} placeholder="08:00, 20:00" required /></Field><Field label="Instructions"><input value={it.instructions} onChange={(e) => upd(n, "instructions", e.target.value)} /></Field>
               </div>
               {items.length > 1 && <button type="button" className="outline-button" onClick={() => setItems(items.filter((_, i) => i !== n))}>Remove</button>}
@@ -465,7 +466,7 @@ export function DoctorPrescriptions() {
       {list.data!.prescriptions.length === 0 ? <Empty title="None yet" text="Open Appointments and choose Prescribe during or after a consultation." /> :
         <ul className="rx-list">{list.data!.prescriptions.map((p) => (
           <li key={p.id} className="rx-card"><header><div><strong>{p.id}</strong><small>{p.patientName} · {fmtDate(p.issuedAt)} · {p.revisions.length} revision(s)</small></div><Badge tone={statusTone(p.status)}>{humanize(p.status)}</Badge></header>
-            <ul className="bullets">{p.items.map((i: any, n: number) => <li key={n}><strong>{i.name}</strong> — {i.dose}, {i.route}, {i.frequency}, {i.durationDays} days · reminders {i.times.join(", ")}</li>)}</ul>
+            <ul className="bullets">{p.items.map((i: any, n: number) => <li key={n}><strong>{i.name}</strong> — {i.dose}, {i.route}, {i.frequency}, {i.durationDays} days{i.color ? ` · tablet color ${i.color}` : ""} · reminders {i.times.join(", ")}</li>)}</ul>
             {p.status === "active" && <div className="row-actions"><button className="outline-button" onClick={() => setEdit(p)}>Revise</button><button className="outline-button" onClick={() => revoke(p.id)}>Revoke</button></div>}
             {p.status === "revoked" && <small>Revoked: {p.revokeReason}</small>}</li>))}</ul>}
       {edit && <PrescribeModal existing={edit} onClose={() => setEdit(null)} onDone={() => list.reload()} />}

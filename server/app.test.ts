@@ -102,9 +102,10 @@ describe("Smart Diagno platform", () => {
     assert.equal((await other.call("GET", "/api/medicine-reminders")).body.reminders.length, 0);
     assert.equal((await pharmacy.call("GET", "/api/medicine-reminders")).status, 403);
     assert.equal((await patient.call("POST", "/api/medicine-reminders", { medicine: "Vitamin D", time: "25:90" })).status, 400);
-    const created = await patient.call("POST", "/api/medicine-reminders", { medicine: "Vitamin D", time: "08:30" });
+    const created = await patient.call("POST", "/api/medicine-reminders", { medicine: "Vitamin D", color: "White", time: "08:30" });
     assert.equal(created.status, 201);
     assert.equal(created.body.reminder.repeat, "daily");
+    assert.equal(created.body.reminder.color, "White");
     assert.equal(created.body.reminder.time, "08:30");
     const reminderId = created.body.reminder.id;
     assert.equal((await other.call("GET", "/api/medicine-reminders")).body.reminders.length, 0);
@@ -329,10 +330,11 @@ describe("Smart Diagno platform", () => {
   });
 
   it("restricts prescriptions to the verified treating doctor", async () => {
-    const item = { name: "Test medicine", dose: "1 unit", route: "oral", frequency: "twice daily", durationDays: 5, times: ["08:00", "20:00"] };
+    const item = { name: "Test medicine", dose: "1 unit", route: "oral", frequency: "twice daily", color: "White", durationDays: 5, times: ["08:00", "20:00"] };
     assert.equal((await patient.call("POST", "/api/prescriptions", { appointmentId, items: [item] })).status, 403);
     const created = await doctor.call("POST", "/api/prescriptions", { appointmentId, items: [item] });
     assert.equal(created.status, 201);
+    assert.equal(created.body.prescription.items[0].color, "White");
     rxId = created.body.prescription.id;
     assert.equal((await other.call("GET", "/api/prescriptions")).body.prescriptions.length, 0);
     assert.equal((await patient.call("PUT", `/api/prescriptions/${rxId}`, { items: [item] })).status, 403);

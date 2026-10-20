@@ -1425,7 +1425,7 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
 .pharmacy-chat-message p { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pharmacy-chat-form { display: flex; gap: 8px; align-items: flex-end; }
 .pharmacy-chat-form textarea { flex: 1; resize: vertical; min-height: 44px; }
-.medicine-reminder-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, .45fr) auto; align-items: end; gap: 12px; }
+.medicine-reminder-form { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(150px, .7fr) auto; align-items: end; gap: 12px; }
 
 @media (max-width: 600px) {
   .pharmacy-request-form { padding: 12px; }

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, Bell, Building2, CalendarDays, Download, Eye, EyeOff, FileText, HeartPulse, HelpCircle, Info, LocateFixed, MapPin, MessageSquare, Navigation, Pill, Plus, Search, Send, ShieldAlert, Sparkles, Star, Stethoscope, Trash2, Upload, UserPlus, Video, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, AlertTriangle, Bell, Building2, CalendarDays, Download, Eye, EyeOff, FileText, HeartPulse, HelpCircle, Info, LocateFixed, MapPin, MessageSquare, Navigation, Pill, Plus, Search, Send, ShieldAlert, Sparkles, Star, Stethoscope, Trash2, Upload, UserPlus, Video, Volume2, X } from "lucide-react";
 import { del, get, patch, post, put } from "./api";
 import { useAuth } from "./auth";
 import { COUNTRIES, INDIA_STATES } from "./locationData";
@@ -12,10 +12,10 @@ import { detectDeviceLocation, PHARMACY_SEARCH_RADIUS_KM } from "./location";
 import { Alert, Badge, Empty, Field, fmtDate, fmtDateTime, humanize, Loading, Modal, Panel, statusTone, SubmitButton, useAction, useLoad } from "./ui";
 
 type Appt = { id: string; doctorName: string; start: string; mode: string; status: string; reason: string; durationMin: number; videoNote?: string };
-type RxItem = { name: string; dose: string; route: string; frequency: string; timing?: string; durationDays: number; times: string[]; instructions?: string };
+type RxItem = { name: string; dose: string; route: string; frequency: string; timing?: string; color?: string; durationDays: number; times: string[]; instructions?: string };
 type Rx = { id: string; doctorName: string; status: string; issuedAt: string; items: RxItem[]; notes: string; verifyPath: string; revokeReason?: string };
 type DoseLog = { prescriptionId: string; itemIndex: number; scheduledAt: string; status: "taken" | "skipped"; respondedAt: string };
-type MedicineReminder = { id: string; medicine: string; time: string; repeat: "daily" };
+type MedicineReminder = { id: string; medicine: string; color?: string; time: string; repeat: "daily" };
 
 /* ---------- Overview ---------- */
 export function PatientOverview() {
@@ -1073,6 +1073,32 @@ function Symptoms() {
 type Dose = { key: string; rxId: string; itemIndex: number; name: string; detail: string; at: Date; status: "taken" | "skipped" | "due" | "upcoming" | "unacknowledged" };
 const GRACE_MS = 60 * 60_000;
 const SNOOZE_KEY = "sd_snooze";
+const ALARM_ALERTED_KEY = "sd_alarm_alerted_v2";
+
+async function playMedicineAlarm(context: AudioContext, medicine: string, color?: string) {
+  await context.resume();
+  const start = context.currentTime;
+  for (let i = 0; i < 4; i += 1) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const onset = start + i * 0.55;
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(i % 2 === 0 ? 880 : 660, onset);
+    gain.gain.setValueAtTime(0.001, onset);
+    gain.gain.exponentialRampToValueAtTime(0.65, onset + 0.04);
+    gain.gain.setValueAtTime(0.65, onset + 0.3);
+    gain.gain.exponentialRampToValueAtTime(0.001, onset + 0.42);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(onset);
+    oscillator.stop(onset + 0.44);
+  }
+  await new Promise((resolve) => window.setTimeout(resolve, 2_400));
+  const shade = color && color !== "Not specified" ? `, color ${color}` : ", color not specified";
+  const phrase = `Tablet ${medicine}${shade}.`;
+  const utterance = new SpeechSynthesisUtterance(Array(3).fill(phrase).join(" "));
+  window.speechSynthesis.speak(utterance);
+}
 
 function buildDoses(prescriptions: Rx[], logs: DoseLog[], snoozed: Record<string, number>): Dose[] {
   const doses: Dose[] = [];
@@ -1103,49 +1129,83 @@ export function Medicines() {
   const reminders = useLoad(() => get<{ reminders: MedicineReminder[] }>("/medicine-reminders"), []);
   const [tab, setTab] = useState<"reminders" | "prescriptions" | "check">("reminders");
   const [manualMedicine, setManualMedicine] = useState("");
+  const [manualColor, setManualColor] = useState("");
   const [manualTime, setManualTime] = useState("");
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundError, setSoundError] = useState("");
+  const soundContext = useRef<AudioContext | null>(null);
+  const alarmQueue = useRef(Promise.resolve());
   const [snoozed, setSnoozed] = useState<Record<string, number>>(() => { try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}"); } catch { return {}; } });
   const [, tick] = useState(0);
-  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 30_000); return () => clearInterval(t); }, []);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 5_000); return () => clearInterval(t); }, []);
 
-  const doses = useMemo(() => buildDoses(rx.data?.prescriptions ?? [], logs.data?.doseLogs ?? [], snoozed), [rx.data, logs.data, snoozed, Date.now() / 30_000 | 0]);
+  const doses = useMemo(() => buildDoses(rx.data?.prescriptions ?? [], logs.data?.doseLogs ?? [], snoozed), [rx.data, logs.data, snoozed, Date.now() / 5_000 | 0]);
+  const queueAlarm = useCallback((medicine: string, color?: string) => {
+    alarmQueue.current = alarmQueue.current.then(async () => {
+      if (soundContext.current) await playMedicineAlarm(soundContext.current, medicine, color);
+    }).catch((error: unknown) => {
+      setSoundError(error instanceof Error ? error.message : "Could not play the medicine alarm.");
+    });
+  }, []);
 
   useEffect(() => {
-    if (!user?.preferences.browserNotifications || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const canNotify = Boolean(user?.preferences.browserNotifications && typeof Notification !== "undefined" && Notification.permission === "granted");
+    if (!canNotify && !soundEnabled) return;
     let stored: string[] = [];
     try {
-      const parsed: unknown = JSON.parse(sessionStorage.getItem("sd_notified") ?? "[]");
+      const parsed: unknown = JSON.parse(sessionStorage.getItem(ALARM_ALERTED_KEY) ?? "[]");
       if (Array.isArray(parsed)) stored = parsed.filter((item): item is string => typeof item === "string");
     } catch { stored = []; }
-    const notified = new Set<string>(stored);
-    for (const dose of doses.filter((d) => d.status === "due" && !notified.has(d.key))) {
-      new Notification("Medicine reminder", { body: `${dose.name} (${dose.detail}) was scheduled for ${dose.at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` });
-      notified.add(dose.key);
+    const alerted = new Set<string>(stored);
+    const now = Date.now();
+    for (const dose of doses) {
+      const elapsed = now - dose.at.getTime();
+      const key = `prescription:${dose.key}`;
+      if (elapsed < 0 || elapsed > 60_000 || dose.status === "taken" || dose.status === "skipped" || alerted.has(key)) continue;
+      const item = rx.data?.prescriptions.find((prescription) => prescription.id === dose.rxId)?.items[dose.itemIndex];
+      if (canNotify) new Notification("Medicine reminder", { body: `${dose.name}${item?.color ? `, color ${item.color}` : ""} (${dose.detail}) is scheduled now.` });
+      if (soundEnabled) queueAlarm(dose.name, item?.color);
+      alerted.add(key);
     }
-    const now = new Date();
-    const dayKey = now.toLocaleDateString();
+    const current = new Date();
+    const dayKey = `${current.getFullYear()}-${current.getMonth()}-${current.getDate()}`;
     for (const reminder of reminders.data?.reminders ?? []) {
       const [hour, minute] = reminder.time.split(":").map(Number);
-      const due = new Date();
+      const due = new Date(current);
       due.setHours(hour, minute, 0, 0);
       const key = `manual:${reminder.id}:${dayKey}`;
-      const elapsed = now.getTime() - due.getTime();
-      if (elapsed >= 0 && elapsed <= 30_000 && !notified.has(key)) {
-        new Notification("Medicine reminder", { body: `Time to take ${reminder.medicine}.` });
-        notified.add(key);
-      }
+      const elapsed = current.getTime() - due.getTime();
+      if (elapsed < 0 || elapsed > 60_000 || alerted.has(key)) continue;
+      if (canNotify) new Notification("Medicine reminder", { body: `Time to take ${reminder.medicine}${reminder.color ? `, color ${reminder.color}` : ""}.` });
+      if (soundEnabled) queueAlarm(reminder.medicine, reminder.color);
+      alerted.add(key);
     }
-    sessionStorage.setItem("sd_notified", JSON.stringify([...notified]));
-  }, [doses, reminders.data, user]);
+    sessionStorage.setItem(ALARM_ALERTED_KEY, JSON.stringify([...alerted]));
+  }, [doses, reminders.data, rx.data, soundEnabled, user, queueAlarm]);
 
   const snooze = (key: string) => { const next = { ...snoozed, [key]: Date.now() + 10 * 60_000 }; setSnoozed(next); localStorage.setItem(SNOOZE_KEY, JSON.stringify(next)); };
   const action = useAction();
   const reminderAction = useAction();
+  const enableSound = async () => {
+    setSoundError("");
+    if (!("AudioContext" in window) || !("speechSynthesis" in window)) {
+      setSoundError("Sound and spoken alarms are not supported by this browser.");
+      return;
+    }
+    try {
+      soundContext.current ??= new AudioContext();
+      await soundContext.current.resume();
+      setSoundEnabled(true);
+    } catch (error) {
+      setSoundError(error instanceof Error ? error.message : "Could not enable sound alarms.");
+    }
+  };
   const record = async (dose: Dose, status: "taken" | "skipped") => { if (await action.run(() => post("/dose-logs", { prescriptionId: dose.rxId, itemIndex: dose.itemIndex, scheduledAt: dose.at.toISOString(), status }))) logs.reload(); };
   const addReminder = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (await reminderAction.run(() => post("/medicine-reminders", { medicine: manualMedicine, time: manualTime }))) {
+    if (await reminderAction.run(() => post("/medicine-reminders", { medicine: manualMedicine, color: manualColor, time: manualTime }))) {
       setManualMedicine("");
+      setManualColor("");
       setManualTime("");
       reminders.reload();
     }
@@ -1164,12 +1224,20 @@ export function Medicines() {
       <div className="tabs" role="tablist">{(["reminders", "prescriptions", "check"] as const).map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t === "check" ? "Medicine check" : humanize(t)}</button>)}</div>
       {tab === "reminders" && (rx.loading || logs.loading || reminders.loading ? <Loading /> : <>
         <NotificationSettings />
+        <Alert>
+          <strong>Audible alarms:</strong> The alarm rings first, then speaks the tablet name and color three times.{" "}
+          {soundEnabled ? <Badge tone="good">Sound alarms on for this page</Badge> : <button className="outline-button" onClick={() => void enableSound()}><Volume2 size={14} /> Enable sound alarms</button>}
+          {soundError && <small> {soundError}</small>}
+        </Alert>
         {action.error && <Alert kind="error">{action.error}</Alert>}
         <Panel title="Add a medicine alarm" kicker="Daily reminder">
-          <Alert>Set a reminder for a medicine you already take as directed. This does not create a prescription or change your treatment. Alarms work only while Smart Diagno is open; enable browser notifications for alerts.</Alert>
+          <Alert>Set a reminder for a medicine you already take as directed. This does not create a prescription or change your treatment. Alarms work only while Smart Diagno is open on this page. Enter the tablet color so the voice alert can identify it.</Alert>
           <form className="medicine-reminder-form" onSubmit={addReminder}>
             <Field label="Medicine name">
               <input value={manualMedicine} onChange={(event) => setManualMedicine(event.target.value)} minLength={2} maxLength={120} placeholder="Enter medicine name" required />
+            </Field>
+            <Field label="Tablet color">
+              <input value={manualColor} onChange={(event) => setManualColor(event.target.value)} maxLength={40} placeholder="e.g. white" required />
             </Field>
             <Field label="Alarm time">
               <input type="time" value={manualTime} onChange={(event) => setManualTime(event.target.value)} required />
@@ -1181,7 +1249,7 @@ export function Medicines() {
             <ul className="list">
               {reminders.data.reminders.map((reminder) => (
                 <li key={reminder.id}>
-                  <div><strong>{reminder.medicine}</strong><small>Every day at {new Date(`2000-01-01T${reminder.time}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div>
+                  <div><strong>{reminder.medicine}</strong><small>{reminder.color || "Color not specified"} · Every day at {new Date(`2000-01-01T${reminder.time}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div>
                   <button className="icon-btn" aria-label={`Remove ${reminder.medicine} alarm`} onClick={() => void removeReminder(reminder.id)}><Trash2 size={15} /></button>
                 </li>
               ))}
@@ -1242,7 +1310,7 @@ function Prescriptions({ rx }: { rx: ReturnType<typeof useLoad<{ prescriptions: 
       {list.length === 0 ? <Empty icon={<FileText size={22} />} title="No prescriptions" text="Only a verified doctor can issue a prescription after a consultation." /> :
         <ul className="rx-list">{list.map((p) => (
           <li key={p.id} className="rx-card"><header><div><strong>{p.id}</strong><small>{p.doctorName} · {fmtDate(p.issuedAt)}</small></div><Badge tone={statusTone(p.status)}>{humanize(p.status)}</Badge></header>
-            <ul className="bullets">{p.items.map((i, n) => <li key={n}><strong>{i.name}</strong> — {i.dose}, {i.route}, {i.frequency}{i.timing ? `, ${i.timing}` : ""}, {i.durationDays} days{i.instructions ? `. ${i.instructions}` : ""}</li>)}</ul>
+            <ul className="bullets">{p.items.map((i, n) => <li key={n}><strong>{i.name}</strong> — {i.dose}, {i.route}, {i.frequency}{i.timing ? `, ${i.timing}` : ""}, {i.durationDays} days{i.color ? ` · tablet color ${i.color}` : ""}{i.instructions ? `. ${i.instructions}` : ""}</li>)}</ul>
             {p.notes && <p>{p.notes}</p>}{p.status === "revoked" && <Alert kind="error">Revoked{p.revokeReason ? `: ${p.revokeReason}` : ""}. Contact your doctor; don't change treatment on your own.</Alert>}
             <div className="row-actions"><Link to={p.verifyPath} className="outline-button">Verification page</Link>{p.status === "active" && <button className="button button-small" onClick={() => setSharing(p)}><Send size={14} /> Share with pharmacy</button>}</div></li>))}</ul>}
       {sharing && <ShareModal rx={sharing} onClose={() => setSharing(null)} onDone={() => { setSharing(null); navigate("/app/orders"); }} />}

@@ -352,7 +352,7 @@ careRouter.get("/doctor/patients/:patientId", doctorOnly, requireVerified, (requ
 // ---------- Prescriptions ----------
 const itemSchema = z.object({
   name: z.string().trim().min(2).max(120), dose: z.string().trim().min(1).max(60), route: z.string().trim().min(2).max(40),
-  frequency: z.string().trim().min(2).max(80), timing: z.string().trim().max(80).optional(),
+  frequency: z.string().trim().min(2).max(80), timing: z.string().trim().max(80).optional(), color: z.string().trim().max(40).optional(),
   durationDays: z.number().int().min(1).max(365), times: z.array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)).min(1).max(8),
   instructions: z.string().trim().max(300).optional(),
 }).strict();
@@ -420,6 +420,7 @@ careRouter.post("/prescriptions/:id/revoke", doctorOnly, (request, response) => 
 // ---------- Dose logs ----------
 const medicineReminderSchema = z.object({
   medicine: z.string().trim().min(2).max(120),
+  color: z.string().trim().max(40).optional(),
   time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, "Choose a valid alarm time."),
 }).strict();
 
@@ -436,6 +437,7 @@ careRouter.post("/medicine-reminders", patientOnly, (request, response) => {
   const reminder = insert("medicineReminders", {
     patientId: currentUser(request).id,
     medicine: data.medicine,
+    color: data.color || "Not specified",
     time: data.time,
     repeat: "daily",
   });
