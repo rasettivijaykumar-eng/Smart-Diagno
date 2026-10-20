@@ -74,6 +74,30 @@ describe("Smart Diagno platform", () => {
     assert.equal((await pharmacy.call("GET", "/api/pharmacy/profile")).body.profile.postalCode, "517581");
   });
 
+  it("keeps one saved patient-to-pharmacy conversation and notifies both participants", async () => {
+    const opened = await patient.call("GET", `/api/pharmacy-chats/shop/${pharmacyProfileId}`);
+    assert.equal(opened.status, 200);
+    const chatId = opened.body.chat.id;
+    assert.equal(opened.body.chat.messages.length, 0);
+    assert.equal((await patient.call("POST", `/api/pharmacy-chats/shop/${pharmacyProfileId}/messages`, { text: "Do you have this medicine?" })).status, 201);
+
+    const pharmacyChats = await pharmacy.call("GET", "/api/pharmacy-chats");
+    assert.equal(pharmacyChats.body.chats.length, 1);
+    assert.equal(pharmacyChats.body.chats[0].id, chatId);
+    assert.equal(pharmacyChats.body.chats[0].unreadCount, 1);
+    assert.equal((await pharmacy.call("GET", "/api/notifications")).body.notifications.some((notification: any) => notification.title === "New patient message"), true);
+    assert.equal((await other.call("GET", `/api/pharmacy-chats/${chatId}`)).status, 404);
+    assert.equal((await unverifiedPharmacy.call("GET", `/api/pharmacy-chats/${chatId}`)).status, 404);
+
+    assert.equal((await pharmacy.call("POST", `/api/pharmacy-chats/${chatId}/messages`, { text: "Yes, please share the quantity you need." })).status, 201);
+    const conversation = await patient.call("GET", `/api/pharmacy-chats/${chatId}`);
+    assert.equal(conversation.body.chat.messages.length, 2);
+    assert.equal(conversation.body.chat.messages[1].senderRole, "pharmacy");
+    assert.equal((await patient.call("GET", `/api/pharmacy-chats/shop/${pharmacyProfileId}`)).body.chat.id, chatId);
+    assert.equal((await patient.call("GET", "/api/pharmacy-chats")).body.chats.length, 1);
+    assert.equal((await pharmacy.call("GET", "/api/pharmacy-chats/another-chat-id")).status, 404);
+  });
+
   it("requires a location for nearby search and applies the 20 km radius", async () => {
     const anon = new Client();
     assert.equal((await anon.call("GET", "/api/doctors?nearby=true")).status, 400);
@@ -147,7 +171,7 @@ describe("Smart Diagno platform", () => {
       if (url.startsWith("https://nominatim.openstreetmap.org/search?")) {
         const params = new URL(url).searchParams;
         assert.match(params.get("q") ?? "", /Narayanavanam.*India/);
-        assert.doesNotMatch(params.get("q") ?? "", /517581/);
+        assert.match(params.get("q") ?? "", /517581/);
         return new Response(JSON.stringify([{
           lat: "13.4251452",
           lon: "79.5875358",
@@ -203,6 +227,8 @@ describe("Smart Diagno platform", () => {
       return new Response("", { status: 503 });
     };
     try {
+      await pharmacy.call("PUT", "/api/pharmacy/profile", { name: "Test Pharmacy", address: "Narayanavanam, Tirupati, Andhra Pradesh 517581", hours: "", delivery: false, lat: 13.422, lng: 79.582 });
+      await unverifiedPharmacy.call("PUT", "/api/pharmacy/profile", { name: "Unverified Pharmacy", address: "Narayanavanam, Tirupati, Andhra Pradesh 517581", hours: "", delivery: false, lat: 13.423, lng: 79.583 });
       const client = new Client();
       assert.equal((await client.call("GET", "/api/places/pharmacies/search?country=India&state=Andhra%20Pradesh&district=Tirupati&village=Narayanavanam")).status, 400);
       assert.equal((await client.call("GET", "/api/places/pharmacies/search?country=India&state=Andhra%20Pradesh&district=Tirupati&village=Narayanavanam&postalCode=51758")).status, 400);
@@ -212,11 +238,15 @@ describe("Smart Diagno platform", () => {
       assert.equal(result.body.mapListingsAvailable, true);
       assert.deepEqual(result.body.providers, { googlePlaces: "available", googleNearby: "available", googleTextSearch: "available", openStreetMap: "available" });
       assert.deepEqual(result.body.shops.map((shop: any) => shop.name), [
+        "Test Pharmacy",
+        "Unverified Pharmacy",
         "Google Local Pharmacy",
         "Dr. Raju Pharmacy and Clinic",
         "Pin Medical Store",
         "Local Medicals",
       ]);
+      assert.equal(result.body.shops.find((shop: any) => shop.id === pharmacyProfileId).orderable, true);
+      assert.equal(result.body.shops.find((shop: any) => shop.name === "Unverified Pharmacy").orderable, false);
     } finally {
       globalThis.fetch = originalFetch;
       if (originalMapsKey === undefined) delete process.env.GOOGLE_MAPS_API_KEY;

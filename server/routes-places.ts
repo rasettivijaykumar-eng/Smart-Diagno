@@ -17,11 +17,13 @@ type NearbyPharmacy = {
   lat: number;
   lng: number;
   distanceKm: number;
+  locationKnown?: boolean;
   source: "google" | "openstreetmap" | "smart-diagno";
   orderable: boolean;
   directionsUrl: string;
   mapsUrl: string;
   phone?: string;
+  verification?: string;
 };
 
 type PharmacyMapResults = {
@@ -43,10 +45,19 @@ type PharmacyProviderStatus = {
   openStreetMap: string;
 };
 
+type AreaPharmacyResults = {
+  shops: NearbyPharmacy[];
+  available: boolean;
+  label: string;
+  center: { lat: number; lng: number };
+  bounds: PlaceBounds;
+  providers: PharmacyProviderStatus;
+};
+
 const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 const cache = new Map<string, { at: number; value: Hospital[] }>();
 const pharmacyCache = new Map<string, { at: number; value: PharmacyMapResults }>();
-const areaPharmacyCache = new Map<string, { at: number; value: { shops: NearbyPharmacy[]; available: boolean; label: string; center: { lat: number; lng: number }; providers: PharmacyProviderStatus } }>();
+const areaPharmacyCache = new Map<string, { at: number; value: AreaPharmacyResults }>();
 const CACHE_MS = 10 * 60 * 1000;
 const DEFAULT_PHARMACY_RADIUS_KM = 29;
 
@@ -253,16 +264,17 @@ function isNonPharmacyPlaceName(name: string) {
     && !/\b(pharmacy|chemist|medicals?|drugstore|pharma|medicine shop|aushadhi)\b/i.test(name);
 }
 
-async function findPharmaciesInArea(query: string, postalCode: string): Promise<{
+async function findPharmaciesInArea(query: string, postalCode: string, village: string): Promise<{
   shops: NearbyPharmacy[];
   available: boolean;
   label: string;
   center: { lat: number; lng: number };
+  bounds: PlaceBounds;
   providers: PharmacyProviderStatus;
 }> {
   const areaQuery = query;
   const geocodeParams = new URLSearchParams({
-    format: "jsonv2", addressdetails: "1", limit: "1", q: areaQuery,
+    format: "jsonv2", addressdetails: "1", limit: "1", q: `${areaQuery}, ${postalCode}`,
   });
   const geocodeResponse = await fetch(`https://nominatim.openstreetmap.org/search?${geocodeParams}`, {
     signal: AbortSignal.timeout(8000),
@@ -470,7 +482,44 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
       );
     })
   );
-  return { shops: unique, available, label: String(place.display_name ?? areaQuery), center, providers };
+  return { shops: unique, available, label: String(place.display_name ?? areaQuery), center, bounds, providers };
+}
+
+function registeredPharmaciesInArea(postalCode: string, village: string, bounds: PlaceBounds, center: { lat: number; lng: number }) {
+  const normalizedVillage = village.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return db.pharmacies.flatMap((pharmacy): NearbyPharmacy[] => {
+    if (String(pharmacy.postalCode ?? "").replace(/\s/g, "").toLowerCase() !== postalCode.replace(/\s/g, "").toLowerCase()) return [];
+    const hasCoordinates = typeof pharmacy.lat === "number" && typeof pharmacy.lng === "number";
+    const address = String(pharmacy.address ?? "");
+    const addressHasVillage = address.toLowerCase().replace(/[^a-z0-9]/g, "").includes(normalizedVillage);
+    if (hasCoordinates ? !isWithinBounds(pharmacy.lat, pharmacy.lng, bounds) : !addressHasVillage) return [];
+    const lat = hasCoordinates ? pharmacy.lat : center.lat;
+    const lng = hasCoordinates ? pharmacy.lng : center.lng;
+    return [{
+      id: pharmacy.id,
+      name: pharmacy.name,
+      address,
+      lat,
+      lng,
+      distanceKm: Math.round(distanceKm(center.lat, center.lng, lat, lng) * 10) / 10,
+      locationKnown: hasCoordinates,
+      source: "smart-diagno",
+      orderable: pharmacy.verification === "verified",
+      verification: pharmacy.verification ?? "pending",
+      directionsUrl: hasCoordinates ? directions(lat, lng, pharmacy.placeId) : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`,
+      mapsUrl: hasCoordinates ? mapsLink(pharmacy.name, lat, lng) : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${pharmacy.name} ${address}`)}`,
+      phone: pharmacy.phone,
+    }];
+  });
+}
+
+function areaPharmacyListings(mapShops: NearbyPharmacy[], postalCode: string, village: string, bounds: PlaceBounds, center: { lat: number; lng: number }) {
+  const registered = registeredPharmaciesInArea(postalCode, village, bounds, center);
+  const distinctMapShops = mapShops.filter((shop) => !registered.some((pharmacy) => {
+    const sameName = shop.name.toLowerCase().replace(/[^a-z0-9]/g, "") === pharmacy.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return sameName && distanceKm(shop.lat, shop.lng, pharmacy.lat, pharmacy.lng) < 0.3;
+  }));
+  return mergePharmacies(registered, distinctMapShops);
 }
 
 async function fromGoogle(lat: number, lng: number, radiusM: number): Promise<Hospital[] | null> {
@@ -1055,11 +1104,12 @@ placesRouter.get("/places/pharmacies/search", async (request, response) => {
   const cacheKey = `${area.toLowerCase()}|${postalCode?.toLowerCase() ?? ""}`;
   const cached = areaPharmacyCache.get(cacheKey);
   if (cached && Date.now() - cached.at < CACHE_MS) {
+    const registered = registeredPharmaciesInArea(postalCode, village, cached.value.bounds, cached.value.center);
     return response.json({
-      shops: cached.value.shops,
+      shops: areaPharmacyListings(cached.value.shops, postalCode, village, cached.value.bounds, cached.value.center),
       area: cached.value.label,
       center: cached.value.center,
-      mapListingsAvailable: cached.value.available,
+      mapListingsAvailable: cached.value.available || registered.length > 0,
       googlePlacesConfigured: Boolean(process.env.GOOGLE_MAPS_API_KEY),
       providers: cached.value.providers,
     });
@@ -1069,14 +1119,15 @@ placesRouter.get("/places/pharmacies/search", async (request, response) => {
   }
 
   try {
-    const result = await findPharmaciesInArea(area, postalCode);
-    const value = { shops: result.shops, available: result.available, label: result.label, center: result.center, providers: result.providers };
+    const result = await findPharmaciesInArea(area, postalCode, village);
+    const value = { ...result };
     if (result.available) areaPharmacyCache.set(cacheKey, { at: Date.now(), value });
+    const registered = registeredPharmaciesInArea(postalCode, village, result.bounds, result.center);
     response.json({
-      shops: result.shops,
+      shops: areaPharmacyListings(result.shops, postalCode, village, result.bounds, result.center),
       area: result.label,
       center: result.center,
-      mapListingsAvailable: result.available,
+      mapListingsAvailable: result.available || registered.length > 0,
       googlePlacesConfigured: Boolean(process.env.GOOGLE_MAPS_API_KEY),
       providers: result.providers,
     });

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Bell, Boxes, CalendarDays, ClipboardList, FileText, HeartPulse, Home, LogOut, MessageCircleHeart, Pill, Settings, ShieldCheck, ShoppingBag, Stethoscope, Store, Users, Flag, ScrollText, Clock, UserCog } from "lucide-react";
+import { Bell, Boxes, CalendarDays, ClipboardList, FileText, HeartPulse, Home, LogOut, MessageCircleHeart, MessageSquare, Pill, Settings, ShieldCheck, ShoppingBag, Stethoscope, Store, Users, Flag, ScrollText, Clock, UserCog } from "lucide-react";
 import { get, post } from "./api";
 import { AdminOverview, AuditLog, Complaints, Users as AdminUsers, Verifications } from "./Admin";
 import { AuthPage } from "./AuthPage";
@@ -7,6 +7,7 @@ import { Availability, DoctorAppointments, DoctorOverview, DoctorPrescriptions, 
 import { Landing, Brand } from "./Landing";
 import { Appointments, Assistant, Health, Medicines, Orders, PatientDoctors, PatientOverview, PatientSettings } from "./Patient";
 import { Inventory, PharmacyOrders, PharmacyOverview, PharmacyProfile } from "./Pharmacy";
+import { PharmacyChats } from "./PharmacyChat";
 import { PublicDoctors, VerifyPrescription } from "./PublicPages";
 import { useAuth } from "./auth";
 import { Link, navigate, useLocation } from "./router";
@@ -27,6 +28,7 @@ const nav: Record<string, Section[]> = {
   ],
   pharmacy: [
     { path: "", label: "Overview", icon: <Home size={18} /> }, { path: "orders", label: "Orders", icon: <ShoppingBag size={18} /> },
+    { path: "messages", label: "Messages", icon: <MessageSquare size={18} /> },
     { path: "inventory", label: "Inventory", icon: <Boxes size={18} /> }, { path: "profile", label: "Shop", icon: <Store size={18} /> },
   ],
   admin: [
@@ -86,6 +88,7 @@ function Dashboard() {
       case "doctor:profile": return <DoctorProfile />;
       case "pharmacy:": return <PharmacyOverview />;
       case "pharmacy:orders": return <PharmacyOrders />;
+      case "pharmacy:messages": return <PharmacyChats />;
       case "pharmacy:inventory": return <Inventory />;
       case "pharmacy:profile": return <PharmacyProfile />;
       case "admin:": return <AdminOverview />;

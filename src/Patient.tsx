@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, Bell, Building2, CalendarDays, Download, Eye, EyeOff, FileText, HeartPulse, HelpCircle, Info, LocateFixed, MapPin, MessageSquare, Navigation, Pill, Plus, Search, Send, ShieldAlert, Sparkles, Star, Stethoscope, Trash2, Upload, UserPlus, Video, X } from "lucide-react";
 import { del, get, patch, post, put } from "./api";
 import { useAuth } from "./auth";
+import { COUNTRIES, INDIA_STATES } from "./locationData";
 import { BookingModal, DoctorSearch } from "./DoctorSearch";
 import { ConsultationChatModal } from "./ConsultationChat";
 import { GoogleMeetLobbyModal } from "./GoogleMeetLobby";
+import { PatientPharmacyChats, PharmacyConversation } from "./PharmacyChat";
 import { Link, navigate } from "./router";
 import { detectDeviceLocation, PHARMACY_SEARCH_RADIUS_KM } from "./location";
 import { Alert, Badge, Empty, Field, fmtDate, fmtDateTime, humanize, Loading, Modal, Panel, statusTone, SubmitButton, useAction, useLoad } from "./ui";
@@ -1281,6 +1283,13 @@ export function Orders() {
   const [fileError, setFileError] = useState("");
   const [consent, setConsent] = useState(false);
   const [requestDone, setRequestDone] = useState(false);
+  const [manualCountry, setManualCountry] = useState("");
+  const [manualState, setManualState] = useState("");
+  const [manualDistrict, setManualDistrict] = useState("");
+  const [manualVillage, setManualVillage] = useState("");
+  const [manualPostalCode, setManualPostalCode] = useState("");
+  const [customManualVillage, setCustomManualVillage] = useState(false);
+  const [pharmacyChat, setPharmacyChat] = useState<{ id: string; title: string } | null>(null);
   const action = useAction();
   const act = async (id: string, a: string) => { if (await action.run(() => patch(`/orders/${id}/patient`, { action: a }))) list.reload(); };
 
@@ -1297,6 +1306,63 @@ export function Orders() {
     }
   };
 
+  const clearManualSearchResults = () => {
+    setShops([]);
+    setPharmacyId("");
+    setConsent(false);
+    setMapListingsUnavailable(false);
+    setLocationError("");
+    setLocationLabel("Enter a locality and postal code to search medical shops.");
+  };
+
+  const searchManualArea = async () => {
+    const country = manualCountry.trim();
+    const postalCode = manualPostalCode.trim();
+    if (!country || !manualState.trim() || !manualDistrict.trim() || manualVillage.trim().length < 2) {
+      setLocationError("Enter a country, state, district, and village/locality.");
+      return;
+    }
+    const validPostalCode = country === "India" ? /^\d{6}$/.test(postalCode) : /^[A-Za-z0-9 -]{3,12}$/.test(postalCode);
+    if (!validPostalCode) {
+      setLocationError(country === "India" ? "Enter the six-digit pincode for this village." : "Enter a valid postal code for this locality.");
+      return;
+    }
+    setNearbyLoading(true);
+    setLocationError("");
+    setMapListingsUnavailable(false);
+    setPharmacyId("");
+    setConsent(false);
+    setRequestDone(false);
+    try {
+      const query = new URLSearchParams({
+        country,
+        state: manualState.trim(),
+        district: manualDistrict.trim(),
+        village: manualVillage.trim(),
+        postalCode,
+      });
+      const result = await get<{ shops: any[]; area: string; center: { lat: number; lng: number }; mapListingsAvailable?: boolean }>(`/places/pharmacies/search?${query}`);
+      setShops(result.shops);
+      setCoords(result.center);
+      setMapListingsUnavailable(result.mapListingsAvailable === false);
+      setLocationLabel(`Showing medical shops in ${result.area} · pincode ${postalCode}`);
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : "Medical shops could not be found for this locality.");
+      setShops([]);
+    } finally {
+      setNearbyLoading(false);
+    }
+  };
+
+  const openPharmacyChat = async (shop: any) => {
+    try {
+      const result = await get<{ chat: { id: string } }>(`/pharmacy-chats/shop/${encodeURIComponent(shop.id)}`);
+      setPharmacyChat({ id: result.chat.id, title: `Message ${shop.name}` });
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : "This shop's messages could not be opened.");
+    }
+  };
+
   const locateNearby = async () => {
     setNearbyLoading(true);
     setLocationError("");
@@ -1307,12 +1373,12 @@ export function Orders() {
       try {
         const device = await detectDeviceLocation();
         setCoords(device);
-        setLocationLabel("Using your device location");
+        setLocationLabel(`Using your device location · within ${PHARMACY_SEARCH_RADIUS_KM} km`);
         await loadNearby(device.lat, device.lng);
       } catch {
         const fallback = await get<{ lat: number; lng: number; label: string; source: string }>("/places/my-location");
         setCoords({ lat: fallback.lat, lng: fallback.lng });
-        setLocationLabel(`Approximate location: ${fallback.label}`);
+        setLocationLabel(`Approximate location: ${fallback.label} · within ${PHARMACY_SEARCH_RADIUS_KM} km`);
         await loadNearby(fallback.lat, fallback.lng);
       }
     } catch (error) {
@@ -1385,12 +1451,115 @@ export function Orders() {
       {requestDone && <Alert kind="success">Your pharmacy request was sent. The pharmacy will review it and prepare a quotation.</Alert>}
       <form className="stack pharmacy-request-form" onSubmit={submitRequest}>
         <div className="pharmacy-request-heading">
-          <div><h2>Request medicines from a nearby pharmacy</h2><small>{locationLabel} · within {PHARMACY_SEARCH_RADIUS_KM} km</small></div>
+          <div><h2>Request medicines from a nearby pharmacy</h2><small>{locationLabel}</small></div>
           <button type="button" className="outline-button" onClick={() => void locateNearby()} disabled={nearbyLoading}><LocateFixed size={15} /> Refresh location</button>
         </div>
         {locationError && <Alert kind="warn">{locationError}</Alert>}
+        <section className="pharmacy-address-search">
+          <strong>Search shops by country and address</strong>
+          <div className="grid-2">
+            <Field label="Country">
+              <select value={manualCountry} onChange={(event) => {
+                setManualCountry(event.target.value);
+                setManualState("");
+                setManualDistrict("");
+                setManualVillage("");
+                setManualPostalCode("");
+                setCustomManualVillage(false);
+                clearManualSearchResults();
+              }}>
+                <option value="">Select country</option>
+                {COUNTRIES.map((country) => <option key={country.code} value={country.name}>{country.name}</option>)}
+              </select>
+            </Field>
+            <Field label="State / province">
+              {manualCountry === "India" ? (
+                <select value={manualState} disabled={!manualCountry} onChange={(event) => {
+                  setManualState(event.target.value);
+                  setManualDistrict("");
+                  setManualVillage("");
+                  setManualPostalCode("");
+                  setCustomManualVillage(false);
+                  clearManualSearchResults();
+                }}>
+                  <option value="">Select state</option>
+                  {Object.keys(INDIA_STATES).map((state) => <option key={state} value={state}>{state}</option>)}
+                </select>
+              ) : (
+                <input value={manualState} onChange={(event) => {
+                  setManualState(event.target.value);
+                  setManualDistrict("");
+                  setManualVillage("");
+                  setManualPostalCode("");
+                  clearManualSearchResults();
+                }} disabled={!manualCountry} placeholder="Enter state / province" />
+              )}
+            </Field>
+            <Field label="District">
+              {manualCountry === "India" && INDIA_STATES[manualState]?.districts.length ? (
+                <select value={manualDistrict} disabled={!manualState} onChange={(event) => {
+                  setManualDistrict(event.target.value);
+                  setManualVillage("");
+                  setManualPostalCode("");
+                  setCustomManualVillage(false);
+                  clearManualSearchResults();
+                }}>
+                  <option value="">Select district</option>
+                  {INDIA_STATES[manualState].districts.map((district) => <option key={district.name} value={district.name}>{district.name}</option>)}
+                </select>
+              ) : (
+                <input value={manualDistrict} onChange={(event) => {
+                  setManualDistrict(event.target.value);
+                  setManualVillage("");
+                  setManualPostalCode("");
+                  clearManualSearchResults();
+                }} disabled={!manualState} placeholder="Enter district / county" />
+              )}
+            </Field>
+            <Field label="Village / locality">
+              {manualCountry === "India" && (INDIA_STATES[manualState]?.districts.find((district) => district.name === manualDistrict)?.villages?.length ?? 0) > 0 && !customManualVillage ? (
+                <select value={manualVillage} disabled={!manualDistrict} onChange={(event) => {
+                  if (event.target.value === "__custom__") {
+                    setCustomManualVillage(true);
+                    setManualVillage("");
+                  } else {
+                    setManualVillage(event.target.value);
+                  }
+                  setManualPostalCode("");
+                  clearManualSearchResults();
+                }}>
+                  <option value="">Select village / locality</option>
+                  {INDIA_STATES[manualState].districts.find((district) => district.name === manualDistrict)?.villages?.map((village) => <option key={village} value={village}>{village}</option>)}
+                  <option value="__custom__">Enter another village / locality</option>
+                </select>
+              ) : (
+                <input value={manualVillage} onChange={(event) => {
+                  setManualVillage(event.target.value);
+                  setManualPostalCode("");
+                  clearManualSearchResults();
+                }} disabled={!manualDistrict} placeholder="Enter village / locality" />
+              )}
+            </Field>
+            {customManualVillage && <button className="text-link" type="button" onClick={() => {
+              setCustomManualVillage(false);
+              setManualVillage("");
+              setManualPostalCode("");
+              clearManualSearchResults();
+            }}>Choose from village list</button>}
+            <Field label="Pincode / postal code" hint={manualCountry === "India" ? "Enter the six-digit pincode for this village." : "Enter the postal code for this locality."}>
+              <input value={manualPostalCode} onChange={(event) => {
+                setManualPostalCode(event.target.value);
+                clearManualSearchResults();
+              }} placeholder={manualCountry === "India" ? "6-digit pincode" : "Postal code"} autoComplete="postal-code" inputMode={manualCountry === "India" ? "numeric" : "text"} maxLength={12} />
+            </Field>
+          </div>
+          <button type="button" className="outline-button" onClick={() => void searchManualArea()} disabled={nearbyLoading}>
+            <Search size={15} /> Search this village
+          </button>
+        </section>
         <section className="nearby-pharmacy-section">
           <strong>Choose a pharmacy</strong>
+          <small className="muted">Map providers may not list every local shop. Only shops marked Verified can accept orders; map-only listings are not connected to in-app chat.</small>
           {mapListingsUnavailable && <Alert kind="warn">Map listings are temporarily unavailable. Try refreshing your location shortly.</Alert>}
           {nearbyLoading ? <Loading label="Finding nearby medical shops…" /> : shops.length === 0 ? (
             <Empty title={mapListingsUnavailable ? "Could not load nearby pharmacies" : "No nearby pharmacies found"} text={mapListingsUnavailable ? "The map provider could not be reached. Please refresh your location and try again." : "Try refreshing your location. Map-listed shops can be viewed, but only verified Smart Diagno pharmacies can receive requests."} />
@@ -1400,9 +1569,12 @@ export function Orders() {
                 <article key={shop.id} className={`nearby-pharmacy-card ${pharmacyId === shop.id ? "selected" : ""}`}>
                   <label>
                     <input type="radio" name="order-pharmacy" checked={pharmacyId === shop.id} disabled={!shop.orderable} onChange={() => { setPharmacyId(shop.id); setRequestDone(false); setConsent(false); }} />
-                    <span><strong>{shop.name}</strong><small>{shop.address || "Address not listed"}</small><small>{shop.distanceKm} km · {shop.orderable ? "Verified — accepts requests" : "Map listing — not on Smart Diagno"}</small></span>
+                    <span><strong>{shop.name}</strong><small>{shop.address || "Address not listed"}</small><small>{shop.locationKnown === false ? "Distance unavailable · " : shop.distanceKm == null ? "" : `${shop.distanceKm} km · `}{shop.orderable ? "Verified — can receive orders" : shop.source === "smart-diagno" ? `Not verified (${shop.verification ?? "pending"}) — ordering unavailable; messaging available` : "Not verified — map listing; ordering and in-app messaging unavailable"}</small></span>
                   </label>
-                  <a className="outline-button button-small" href={shop.directionsUrl} target="_blank" rel="noreferrer">Directions</a>
+                  <div className="row-actions">
+                    {shop.source === "smart-diagno" && <button type="button" className="outline-button button-small" onClick={() => void openPharmacyChat(shop)}><MessageSquare size={14} /> Message</button>}
+                    <a className="outline-button button-small" href={shop.directionsUrl} target="_blank" rel="noreferrer"><Navigation size={14} /> Navigate</a>
+                  </div>
                 </article>
               ))}
             </div>
@@ -1430,6 +1602,8 @@ export function Orders() {
         <label className="check-row consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>I agree to share my name and the selected prescription, medicine list, attachments, and delivery address with this pharmacy. This does not share my other health records.</span></label>
         <SubmitButton busy={action.busy} disabled={!consent || !pharmacyId || nearbyLoading}>Send request to pharmacy</SubmitButton>
       </form>
+      <PatientPharmacyChats />
+      {pharmacyChat && <PharmacyConversation chatId={pharmacyChat.id} title={pharmacyChat.title} onClose={() => setPharmacyChat(null)} />}
       {list.data!.orders.length === 0 ? <Empty title="No orders" text="Your pharmacy requests and quotations will appear here." action={<Link to="/app/medicines" className="outline-button">Go to Medicines</Link>} /> :
         <ul className="rx-list">{list.data!.orders.map((o) => (
           <li key={o.id} className="rx-card"><header><div><strong>{o.pharmacyName}</strong><small>{o.prescription ? `Prescription ${o.prescription.id}` : "Medicine request"}</small></div><Badge tone={statusTone(o.status)}>{humanize(o.status)}</Badge></header>

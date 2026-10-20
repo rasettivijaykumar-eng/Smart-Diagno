@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { audit, db, findById, inMemory, insert, newId, notify, nowIso, save, uploadDir, type Row } from "./store.ts";
-import { currentUser, pharmacyProfile, requireRole, requireVerified } from "./security.ts";
+import { currentUser, pharmacyProfile, rateLimit, requireRole, requireVerified } from "./security.ts";
 import { param, parseBody } from "./helpers.ts";
 
 export const pharmacyRouter = Router();
@@ -23,6 +23,114 @@ pharmacyRouter.put("/pharmacy/profile", pharmacyOnly, (request, response) => {
   audit(currentUser(request).id, "pharmacy.profile.update", profile.id);
   save();
   response.json({ profile });
+});
+
+const pharmacyChatMessageSchema = z.object({ text: z.string().trim().min(1).max(2000) }).strict();
+const MAX_PHARMACY_CHAT_MESSAGES = 500;
+
+function pharmacyChatView(chat: Row, userId: string) {
+  return {
+    id: chat.id,
+    pharmacyId: chat.pharmacyId,
+    pharmacyName: chat.pharmacyName,
+    patientName: chat.patientName,
+    updatedAt: chat.updatedAt,
+    unreadCount: chat.messages.filter((message: Row) => message.senderId !== userId && !message.readAt).length,
+    messages: chat.messages,
+  };
+}
+
+function canReadPharmacyChat(chat: Row, user: Row) {
+  return user.role === "patient"
+    ? chat.patientId === user.id
+    : user.role === "pharmacy" && chat.pharmacyUserId === user.id;
+}
+
+function markPharmacyChatRead(chat: Row, userId: string) {
+  const unread = chat.messages.filter((message: Row) => message.senderId !== userId && !message.readAt);
+  if (!unread.length) return;
+  const readAt = nowIso();
+  unread.forEach((message: Row) => { message.readAt = readAt; });
+  save();
+}
+
+function appendPharmacyChatMessage(chat: Row, user: Row, text: string) {
+  if (chat.messages.length >= MAX_PHARMACY_CHAT_MESSAGES) return false;
+  const message = { id: newId("phmsg"), senderId: user.id, senderName: user.name, senderRole: user.role, text, createdAt: nowIso() };
+  chat.messages.push(message);
+  chat.updatedAt = message.createdAt;
+  save();
+  if (user.role === "patient") {
+    notify(chat.pharmacyUserId, "New patient message", `${user.name} sent a message to ${chat.pharmacyName}.`);
+  } else {
+    notify(chat.patientId, "New pharmacy message", `${chat.pharmacyName} replied to your message.`);
+  }
+  audit(user.id, "pharmacy-chat.message", chat.id, { senderRole: user.role });
+  return true;
+}
+
+pharmacyRouter.get("/pharmacy-chats", requireRole("patient", "pharmacy"), (request, response) => {
+  const user = currentUser(request);
+  const chats = db.pharmacyChats
+    .filter((chat) => canReadPharmacyChat(chat, user))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .map((chat) => {
+      const { messages: _messages, ...summary } = pharmacyChatView(chat, user.id);
+      return summary;
+    });
+  response.json({ chats });
+});
+
+pharmacyRouter.get("/pharmacy-chats/shop/:pharmacyId", requireRole("patient"), (request, response) => {
+  const user = currentUser(request);
+  const pharmacy = findById("pharmacies", param(request, "pharmacyId"));
+  if (!pharmacy || !pharmacy.userId) return response.status(404).json({ error: "This shop is not registered for in-app messaging." });
+  let chat = db.pharmacyChats.find((item) => item.patientId === user.id && item.pharmacyId === pharmacy.id);
+  if (!chat) {
+    chat = insert("pharmacyChats", {
+      patientId: user.id, patientName: user.name, pharmacyId: pharmacy.id, pharmacyUserId: pharmacy.userId,
+      pharmacyName: pharmacy.name, messages: [], updatedAt: nowIso(),
+    });
+  }
+  markPharmacyChatRead(chat, user.id);
+  response.json({ chat: pharmacyChatView(chat, user.id) });
+});
+
+pharmacyRouter.get("/pharmacy-chats/:id", requireRole("patient", "pharmacy"), (request, response) => {
+  const user = currentUser(request);
+  const chat = findById("pharmacyChats", param(request, "id"));
+  if (!chat || !canReadPharmacyChat(chat, user)) return response.status(404).json({ error: "Conversation not found." });
+  markPharmacyChatRead(chat, user.id);
+  response.json({ chat: pharmacyChatView(chat, user.id) });
+});
+
+pharmacyRouter.post("/pharmacy-chats/shop/:pharmacyId/messages", requireRole("patient"), (request, response) => {
+  const data = parseBody(pharmacyChatMessageSchema, request, response);
+  if (!data) return;
+  const user = currentUser(request);
+  if (!rateLimit(`pharmacy-chat:${user.id}`, 30, 60_000)) return response.status(429).json({ error: "You're sending messages too quickly. Please wait a moment." });
+  const pharmacy = findById("pharmacies", param(request, "pharmacyId"));
+  if (!pharmacy || !pharmacy.userId) return response.status(404).json({ error: "This shop is not registered for in-app messaging." });
+  let chat = db.pharmacyChats.find((item) => item.patientId === user.id && item.pharmacyId === pharmacy.id);
+  if (!chat) {
+    chat = insert("pharmacyChats", {
+      patientId: user.id, patientName: user.name, pharmacyId: pharmacy.id, pharmacyUserId: pharmacy.userId,
+      pharmacyName: pharmacy.name, messages: [], updatedAt: nowIso(),
+    });
+  }
+  if (!appendPharmacyChatMessage(chat, user, data.text)) return response.status(409).json({ error: "This conversation has reached its message limit." });
+  response.status(201).json({ chat: pharmacyChatView(chat, user.id) });
+});
+
+pharmacyRouter.post("/pharmacy-chats/:id/messages", requireRole("patient", "pharmacy"), (request, response) => {
+  const data = parseBody(pharmacyChatMessageSchema, request, response);
+  if (!data) return;
+  const user = currentUser(request);
+  if (!rateLimit(`pharmacy-chat:${user.id}`, 30, 60_000)) return response.status(429).json({ error: "You're sending messages too quickly. Please wait a moment." });
+  const chat = findById("pharmacyChats", param(request, "id"));
+  if (!chat || !canReadPharmacyChat(chat, user)) return response.status(404).json({ error: "Conversation not found." });
+  if (!appendPharmacyChatMessage(chat, user, data.text)) return response.status(409).json({ error: "This conversation has reached its message limit." });
+  response.status(201).json({ chat: pharmacyChatView(chat, user.id) });
 });
 
 // Inventory ---------------------------------------------------------------

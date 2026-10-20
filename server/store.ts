@@ -8,7 +8,7 @@ export type Row = Record<string, any>;
 const COLLECTIONS = [
   "users", "doctors", "pharmacies", "slots", "appointments", "symptomLogs", "records",
   "prescriptions", "doseLogs", "inventory", "orders", "notifications", "consents",
-  "complaints", "auditLogs", "chats", "consultationChats",
+  "complaints", "auditLogs", "chats", "consultationChats", "pharmacyChats",
 ] as const;
 export type Collection = (typeof COLLECTIONS)[number];
 

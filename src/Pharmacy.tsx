@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Boxes, Plus, Trash2 } from "lucide-react";
 import { del, get, patch, post, put } from "./api";
 import { useAuth } from "./auth";
+import { PharmacyChats } from "./PharmacyChat";
 import { Link } from "./router";
 import { Alert, Badge, Empty, Field, fmtDate, fmtDateTime, humanize, Loading, Modal, Panel, statusTone, SubmitButton, useAction, useLoad } from "./ui";
 
@@ -13,13 +14,14 @@ export function PharmacyOverview() {
     <div className="grid-2">
       <Panel title="Verification">
         <Badge tone={statusTone(profile?.verification ?? "pending")}>{humanize(profile?.verification ?? "pending")}</Badge>
-        <p>{profile?.verification === "verified" ? "You can receive shared prescriptions, quote and fulfil orders." : "Until an administrator verifies your licence you won't be listed and can't receive orders or manage inventory."}</p>
+        <p>{profile?.verification === "verified" ? "You can receive shared prescriptions, quote and fulfil orders." : "Your shop can receive patient messages, but only verified shops can receive orders or manage inventory."}</p>
         {profile?.verificationNote && <small>Note: {profile.verificationNote}</small>}
       </Panel>
       <Panel title="Open orders" action={<Link to="/app/orders" className="text-link">All</Link>}>
         {orders.loading ? <Loading /> : open.length === 0 ? <Empty title="No open orders" /> :
           <ul className="list">{open.map((o) => <li key={o.id}><div><strong>{o.patientName}</strong><small>{o.prescription?.id}</small></div><Badge tone={statusTone(o.status)}>{humanize(o.status)}</Badge></li>)}</ul>}
       </Panel>
+      <PharmacyChats />
     </div>
   );
 }

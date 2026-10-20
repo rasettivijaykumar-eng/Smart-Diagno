@@ -30,6 +30,7 @@ careRouter.get("/me/export", patientOnly, (request, response) => {
     exportedAt: nowIso(), user, symptomLogs: mine(db.symptomLogs),
     records: mine(db.records).map(({ fileData: _data, ...row }) => row), appointments: mine(db.appointments),
     prescriptions: mine(db.prescriptions), doseLogs: mine(db.doseLogs), orders: mine(db.orders), consents: mine(db.consents),
+    pharmacyChats: mine(db.pharmacyChats),
   });
 });
 
@@ -40,7 +41,7 @@ careRouter.delete("/me", patientOnly, (request, response) => {
   if (user.passwordHash && !verifyPassword(data.password, user.passwordHash)) return response.status(401).json({ error: "Password is incorrect." });
   const id = user.id;
   for (const record of db.records.filter((row) => row.patientId === id && row.filePath)) fs.rmSync(record.filePath, { force: true });
-  for (const name of ["symptomLogs", "records", "doseLogs", "consents", "orders", "notifications", "prescriptions", "appointments"] as const) {
+  for (const name of ["symptomLogs", "records", "doseLogs", "consents", "orders", "notifications", "prescriptions", "appointments", "pharmacyChats"] as const) {
     db[name] = db[name].filter((row) => row.patientId !== id && row.userId !== id) as any;
   }
   for (const slot of db.slots) if (slot.patientId === id) { slot.status = "open"; delete slot.patientId; delete slot.appointmentId; }
