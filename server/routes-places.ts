@@ -246,6 +246,11 @@ function matchesPostalCode(address: string, postalCode: string) {
   return new RegExp(`(^|[^a-z0-9])${pattern}($|[^a-z0-9])`, "i").test(address);
 }
 
+function isNonPharmacyPlaceName(name: string) {
+  return /\b(bricks?|palace|hotel|restaurant|school|college|temple|church|mosque|hardware|supermarket|grocery|salon|beauty|garage|automobile|bank|atm|real estate)\b/i.test(name)
+    && !/\b(pharmacy|chemist|medicals?|drugstore|pharma|medicine shop|aushadhi)\b/i.test(name);
+}
+
 async function findPharmaciesInArea(query: string, postalCode: string): Promise<{
   shops: NearbyPharmacy[];
   available: boolean;
@@ -322,13 +327,14 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
           const lat = item.location?.latitude, lng = item.location?.longitude;
           const address = String(item.formattedAddress ?? "");
           if (item.primaryType !== "pharmacy") continue;
+          const name = String(item.displayName?.text ?? "Pharmacy");
+          if (isNonPharmacyPlaceName(name)) continue;
           if (typeof lat !== "number" || typeof lng !== "number" || !isWithinBounds(lat, lng, bounds)) continue;
           const listedPostalCodes = (item.addressComponents ?? [])
             .filter((component: any) => component.types?.includes("postal_code"))
             .map((component: any) => component.longText ?? component.shortText)
             .filter((code: unknown): code is string => typeof code === "string");
           if (postalCode && listedPostalCodes.length && !listedPostalCodes.some((code: string) => matchesPostalCode(code, postalCode))) continue;
-          const name = item.displayName?.text ?? "Pharmacy";
           shops.push({
             id: `g:${item.id}`,
             name,
