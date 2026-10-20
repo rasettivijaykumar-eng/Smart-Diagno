@@ -67,7 +67,7 @@ export function PharmacyConversation({ chatId, title, onClose }: { chatId: strin
   };
 
   return (
-    <Modal title={title} onClose={onClose}>
+    <Modal title={title} onClose={onClose} className="pharmacy-chat-modal">
       <div className="pharmacy-chat">
         <div className="pharmacy-chat-messages" ref={messagesRef} aria-live="polite" aria-label="Conversation messages">
           {loading && !chat ? <Loading label="Loading conversation…" /> : chat?.messages.length ? chat.messages.map((message) => (

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, CheckCircle2, Info, Loader2, X } from "lucide-react";
 import { errorMessage } from "./api";
 
@@ -51,7 +52,7 @@ export function Field({ label, hint, error, children }: { label: string; hint?: 
   return <label className="ui-field"><span>{label}</span>{children}{hint && <small>{hint}</small>}{error && <small className="ui-field-error">{error}</small>}</label>;
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, className = "" }: { title: string; onClose: () => void; children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -60,13 +61,14 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); previous?.focus(); };
   }, [onClose]);
-  return (
+  return createPortal(
     <div className="ui-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div className="ui-modal" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
+      <div className={`ui-modal ${className}`.trim()} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
         <header><h2>{title}</h2><button className="ui-icon-btn" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></header>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

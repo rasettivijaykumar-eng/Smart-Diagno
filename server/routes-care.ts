@@ -30,7 +30,7 @@ careRouter.get("/me/export", patientOnly, (request, response) => {
     exportedAt: nowIso(), user, symptomLogs: mine(db.symptomLogs),
     records: mine(db.records).map(({ fileData: _data, ...row }) => row), appointments: mine(db.appointments),
     prescriptions: mine(db.prescriptions), doseLogs: mine(db.doseLogs), orders: mine(db.orders), consents: mine(db.consents),
-    pharmacyChats: mine(db.pharmacyChats),
+    pharmacyChats: mine(db.pharmacyChats), medicineReminders: mine(db.medicineReminders),
   });
 });
 
@@ -41,7 +41,7 @@ careRouter.delete("/me", patientOnly, (request, response) => {
   if (user.passwordHash && !verifyPassword(data.password, user.passwordHash)) return response.status(401).json({ error: "Password is incorrect." });
   const id = user.id;
   for (const record of db.records.filter((row) => row.patientId === id && row.filePath)) fs.rmSync(record.filePath, { force: true });
-  for (const name of ["symptomLogs", "records", "doseLogs", "consents", "orders", "notifications", "prescriptions", "appointments", "pharmacyChats"] as const) {
+  for (const name of ["symptomLogs", "records", "doseLogs", "consents", "orders", "notifications", "prescriptions", "appointments", "pharmacyChats", "medicineReminders"] as const) {
     db[name] = db[name].filter((row) => row.patientId !== id && row.userId !== id) as any;
   }
   for (const slot of db.slots) if (slot.patientId === id) { slot.status = "open"; delete slot.patientId; delete slot.appointmentId; }
@@ -418,6 +418,42 @@ careRouter.post("/prescriptions/:id/revoke", doctorOnly, (request, response) => 
 });
 
 // ---------- Dose logs ----------
+const medicineReminderSchema = z.object({
+  medicine: z.string().trim().min(2).max(120),
+  time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, "Choose a valid alarm time."),
+}).strict();
+
+careRouter.get("/medicine-reminders", patientOnly, (request, response) => {
+  const reminders = db.medicineReminders
+    .filter((reminder) => reminder.patientId === currentUser(request).id)
+    .sort((a, b) => a.time.localeCompare(b.time) || a.medicine.localeCompare(b.medicine));
+  response.json({ reminders });
+});
+
+careRouter.post("/medicine-reminders", patientOnly, (request, response) => {
+  const data = parseBody(medicineReminderSchema, request, response);
+  if (!data) return;
+  const reminder = insert("medicineReminders", {
+    patientId: currentUser(request).id,
+    medicine: data.medicine,
+    time: data.time,
+    repeat: "daily",
+  });
+  audit(currentUser(request).id, "medicine-reminder.create", reminder.id);
+  response.status(201).json({ reminder });
+});
+
+careRouter.delete("/medicine-reminders/:id", patientOnly, (request, response) => {
+  const index = db.medicineReminders.findIndex((reminder) =>
+    reminder.id === param(request, "id") && reminder.patientId === currentUser(request).id
+  );
+  if (index < 0) return response.status(404).json({ error: "Reminder not found." });
+  const [reminder] = db.medicineReminders.splice(index, 1);
+  audit(currentUser(request).id, "medicine-reminder.delete", reminder.id);
+  save();
+  response.json({ ok: true });
+});
+
 careRouter.get("/dose-logs", patientOnly, (request, response) => {
   response.json({ doseLogs: db.doseLogs.filter((d) => d.patientId === currentUser(request).id).sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt)) });
 });

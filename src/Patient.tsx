@@ -15,6 +15,7 @@ type Appt = { id: string; doctorName: string; start: string; mode: string; statu
 type RxItem = { name: string; dose: string; route: string; frequency: string; timing?: string; durationDays: number; times: string[]; instructions?: string };
 type Rx = { id: string; doctorName: string; status: string; issuedAt: string; items: RxItem[]; notes: string; verifyPath: string; revokeReason?: string };
 type DoseLog = { prescriptionId: string; itemIndex: number; scheduledAt: string; status: "taken" | "skipped"; respondedAt: string };
+type MedicineReminder = { id: string; medicine: string; time: string; repeat: "daily" };
 
 /* ---------- Overview ---------- */
 export function PatientOverview() {
@@ -1099,7 +1100,10 @@ export function Medicines() {
   const { user } = useAuth();
   const rx = useLoad(() => get<{ prescriptions: Rx[] }>("/prescriptions"), []);
   const logs = useLoad(() => get<{ doseLogs: DoseLog[] }>("/dose-logs"), []);
+  const reminders = useLoad(() => get<{ reminders: MedicineReminder[] }>("/medicine-reminders"), []);
   const [tab, setTab] = useState<"reminders" | "prescriptions" | "check">("reminders");
+  const [manualMedicine, setManualMedicine] = useState("");
+  const [manualTime, setManualTime] = useState("");
   const [snoozed, setSnoozed] = useState<Record<string, number>>(() => { try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}"); } catch { return {}; } });
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 30_000); return () => clearInterval(t); }, []);
@@ -1108,17 +1112,47 @@ export function Medicines() {
 
   useEffect(() => {
     if (!user?.preferences.browserNotifications || typeof Notification === "undefined" || Notification.permission !== "granted") return;
-    const notified = new Set<string>(JSON.parse(sessionStorage.getItem("sd_notified") ?? "[]"));
+    let stored: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(sessionStorage.getItem("sd_notified") ?? "[]");
+      if (Array.isArray(parsed)) stored = parsed.filter((item): item is string => typeof item === "string");
+    } catch { stored = []; }
+    const notified = new Set<string>(stored);
     for (const dose of doses.filter((d) => d.status === "due" && !notified.has(d.key))) {
       new Notification("Medicine reminder", { body: `${dose.name} (${dose.detail}) was scheduled for ${dose.at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` });
       notified.add(dose.key);
     }
+    const now = new Date();
+    const dayKey = now.toLocaleDateString();
+    for (const reminder of reminders.data?.reminders ?? []) {
+      const [hour, minute] = reminder.time.split(":").map(Number);
+      const due = new Date();
+      due.setHours(hour, minute, 0, 0);
+      const key = `manual:${reminder.id}:${dayKey}`;
+      const elapsed = now.getTime() - due.getTime();
+      if (elapsed >= 0 && elapsed <= 30_000 && !notified.has(key)) {
+        new Notification("Medicine reminder", { body: `Time to take ${reminder.medicine}.` });
+        notified.add(key);
+      }
+    }
     sessionStorage.setItem("sd_notified", JSON.stringify([...notified]));
-  }, [doses, user]);
+  }, [doses, reminders.data, user]);
 
   const snooze = (key: string) => { const next = { ...snoozed, [key]: Date.now() + 10 * 60_000 }; setSnoozed(next); localStorage.setItem(SNOOZE_KEY, JSON.stringify(next)); };
   const action = useAction();
+  const reminderAction = useAction();
   const record = async (dose: Dose, status: "taken" | "skipped") => { if (await action.run(() => post("/dose-logs", { prescriptionId: dose.rxId, itemIndex: dose.itemIndex, scheduledAt: dose.at.toISOString(), status }))) logs.reload(); };
+  const addReminder = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (await reminderAction.run(() => post("/medicine-reminders", { medicine: manualMedicine, time: manualTime }))) {
+      setManualMedicine("");
+      setManualTime("");
+      reminders.reload();
+    }
+  };
+  const removeReminder = async (id: string) => {
+    if (await reminderAction.run(() => del(`/medicine-reminders/${encodeURIComponent(id)}`))) reminders.reload();
+  };
 
   const today = new Date().toDateString();
   const todays = doses.filter((d) => d.at.toDateString() === today);
@@ -1128,9 +1162,32 @@ export function Medicines() {
   return (
     <div className="stack-lg">
       <div className="tabs" role="tablist">{(["reminders", "prescriptions", "check"] as const).map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t === "check" ? "Medicine check" : humanize(t)}</button>)}</div>
-      {tab === "reminders" && (rx.loading || logs.loading ? <Loading /> : <>
+      {tab === "reminders" && (rx.loading || logs.loading || reminders.loading ? <Loading /> : <>
         <NotificationSettings />
         {action.error && <Alert kind="error">{action.error}</Alert>}
+        <Panel title="Add a medicine alarm" kicker="Daily reminder">
+          <Alert>Set a reminder for a medicine you already take as directed. This does not create a prescription or change your treatment. Alarms work only while Smart Diagno is open; enable browser notifications for alerts.</Alert>
+          <form className="medicine-reminder-form" onSubmit={addReminder}>
+            <Field label="Medicine name">
+              <input value={manualMedicine} onChange={(event) => setManualMedicine(event.target.value)} minLength={2} maxLength={120} placeholder="Enter medicine name" required />
+            </Field>
+            <Field label="Alarm time">
+              <input type="time" value={manualTime} onChange={(event) => setManualTime(event.target.value)} required />
+            </Field>
+            {reminderAction.error && <Alert kind="error">{reminderAction.error}</Alert>}
+            <button className="button" type="submit" disabled={reminderAction.busy}><Plus size={15} /> Add daily alarm</button>
+          </form>
+          {reminders.data?.reminders.length ? (
+            <ul className="list">
+              {reminders.data.reminders.map((reminder) => (
+                <li key={reminder.id}>
+                  <div><strong>{reminder.medicine}</strong><small>Every day at {new Date(`2000-01-01T${reminder.time}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div>
+                  <button className="icon-btn" aria-label={`Remove ${reminder.medicine} alarm`} onClick={() => void removeReminder(reminder.id)}><Trash2 size={15} /></button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="muted">No personal medicine alarms yet.</p>}
+        </Panel>
         {unack.length > 0 && <Alert kind="warn">{unack.length} dose{unack.length > 1 ? "s were" : " was"} not acknowledged. Don't double up on a missed dose. Ask your doctor or pharmacist what to do.</Alert>}
         <Panel title="Today" kicker="From your doctor's prescription">
           {todays.length === 0 ? <Empty icon={<Pill size={22} />} title="No doses today" text="Reminders are created only from active prescriptions issued by a verified doctor." /> :

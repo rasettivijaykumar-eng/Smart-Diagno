@@ -98,6 +98,22 @@ describe("Smart Diagno platform", () => {
     assert.equal((await pharmacy.call("GET", "/api/pharmacy-chats/another-chat-id")).status, 404);
   });
 
+  it("saves patient-owned daily medicine alarms and validates alarm times", async () => {
+    assert.equal((await other.call("GET", "/api/medicine-reminders")).body.reminders.length, 0);
+    assert.equal((await pharmacy.call("GET", "/api/medicine-reminders")).status, 403);
+    assert.equal((await patient.call("POST", "/api/medicine-reminders", { medicine: "Vitamin D", time: "25:90" })).status, 400);
+    const created = await patient.call("POST", "/api/medicine-reminders", { medicine: "Vitamin D", time: "08:30" });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.reminder.repeat, "daily");
+    assert.equal(created.body.reminder.time, "08:30");
+    const reminderId = created.body.reminder.id;
+    assert.equal((await other.call("GET", "/api/medicine-reminders")).body.reminders.length, 0);
+    assert.equal((await other.call("DELETE", `/api/medicine-reminders/${reminderId}`)).status, 404);
+    assert.equal((await patient.call("GET", "/api/medicine-reminders")).body.reminders.length, 1);
+    assert.equal((await patient.call("DELETE", `/api/medicine-reminders/${reminderId}`)).status, 200);
+    assert.equal((await patient.call("GET", "/api/medicine-reminders")).body.reminders.length, 0);
+  });
+
   it("requires a location for nearby search and applies the 20 km radius", async () => {
     const anon = new Client();
     assert.equal((await anon.call("GET", "/api/doctors?nearby=true")).status, 400);
