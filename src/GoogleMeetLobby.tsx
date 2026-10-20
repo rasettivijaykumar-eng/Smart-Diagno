@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   CalendarCheck,
@@ -138,11 +139,11 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
 
   const handleJoinMeet = async () => {
     if (!appt?.googleMeetUrl) return;
+    window.open(appt.googleMeetUrl, "_blank", "noopener,noreferrer");
     if (!hasJoined.current) {
       hasJoined.current = true;
       await post(`/appointments/${appointmentId}/start-consultation`).catch(() => undefined);
     }
-    window.open(appt.googleMeetUrl, "_blank", "noopener,noreferrer");
   };
 
   const handleCompleteConsultation = async () => {
@@ -161,7 +162,7 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
   const lobbyInfo = appt ? lobbyStatusLabel(appt.lobbyStatus) : null;
   void isPatient;
 
-  return (
+  return createPortal(
     <div
       className="ui-modal-backdrop meet-lobby-backdrop"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
@@ -221,6 +222,12 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
                     )}
                   </div>
                   <Badge tone={lobbyInfo.tone === "error" ? "bad" : lobbyInfo.tone}>{appt.lobbyStatus.replace(/_/g, " ")}</Badge>
+                  {appt.lobbyStatus === "both_ready" && appt.googleMeetUrl && (
+                    <button className="button meet-ready-join-btn" onClick={handleJoinMeet} disabled={action.busy}>
+                      <ExternalLink size={16} />
+                      Join Google Meet
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -326,13 +333,9 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
                           {appt.consultationStartedAt ? (
                             <small>Session started at {fmtDateTime(appt.consultationStartedAt)}</small>
                           ) : (
-                            <small>Click to open Google Meet in a new tab</small>
+                            <small>Use the Join Google Meet button above to open the session</small>
                           )}
                         </div>
-                        <button className="button meet-join-btn" onClick={handleJoinMeet} disabled={action.busy}>
-                          <ExternalLink size={16} />
-                          Join Google Meet
-                        </button>
                       </div>
                       {!appt.isTimeEligible && appt.isEarly && (
                         <Alert kind="warn">
@@ -377,7 +380,8 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
           ) : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
