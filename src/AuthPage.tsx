@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Activity, ArrowLeft, Building2, Eye, EyeOff, LocateFixed, MapPin, ShieldCheck, Stethoscope, Pill, UserRound } from "lucide-react";
+import { Activity, ArrowLeft, Building2, Eye, EyeOff, MapPin, ShieldCheck, Stethoscope, Pill, UserRound } from "lucide-react";
 import { get, post } from "./api";
 import { useAuth, type User } from "./auth";
 import { COUNTRIES, INDIA_STATES } from "./locationData";
 import { Link, navigate } from "./router";
-import { detectDeviceLocation, PHARMACY_SEARCH_RADIUS_KM } from "./location";
 import { Alert, Field, Loading, SubmitButton, useAction } from "./ui";
 
 type Role = "patient" | "doctor" | "pharmacy";
@@ -60,6 +59,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [pharmacyState, setPharmacyState] = useState("");
   const [pharmacyDistrict, setPharmacyDistrict] = useState("");
   const [pharmacyVillage, setPharmacyVillage] = useState("");
+  const [pharmacyPostalCode, setPharmacyPostalCode] = useState("");
   const [customPharmacyVillage, setCustomPharmacyVillage] = useState("");
   const pharmacySearchId = useRef(0);
   const [showPassword, setShowPassword] = useState(false);
@@ -72,6 +72,14 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [customVillage, setCustomVillage] = useState("");
 
   const set = (key: string) => (event: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: event.target.value });
+  const clearSelectedPharmacy = () => setForm((previous) => ({
+    ...previous,
+    businessName: previous.placeId ? "" : previous.businessName,
+    address: previous.placeId ? "" : previous.address,
+    placeId: "",
+    lat: "",
+    lng: "",
+  }));
 
   useEffect(() => { if (user) navigate("/app", true); }, [user]);
 
@@ -97,42 +105,12 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     }
   };
 
-  const locatePharmacy = async () => {
-    const searchId = ++pharmacySearchId.current;
-    setLoadingPharmacies(true);
-    setPharmacyLocationError("");
-    setPharmacyMapsUnavailable(false);
-    setGooglePlacesUnavailable(false);
-    try {
-      let coordinates: { lat: number; lng: number };
-      try {
-        coordinates = await detectDeviceLocation();
-        setPharmacyLocation("Using your device location");
-      } catch {
-        const fallback = await get<{ lat: number; lng: number; label: string; source: string }>("/places/my-location");
-        coordinates = { lat: fallback.lat, lng: fallback.lng };
-        setPharmacyLocation(`Using approximate location: ${fallback.label}`);
-      }
-      if (searchId !== pharmacySearchId.current) return;
-      setForm((previous) => ({ ...previous, lat: String(coordinates.lat), lng: String(coordinates.lng) }));
-      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean; googlePlacesConfigured?: boolean }>(`/places/pharmacies?${new URLSearchParams({ lat: String(coordinates.lat), lng: String(coordinates.lng), radiusKm: String(PHARMACY_SEARCH_RADIUS_KM) })}`);
-      if (searchId !== pharmacySearchId.current) return;
-      setNearbyPharmacies(result.shops);
-      setPharmacyMapsUnavailable(result.mapListingsAvailable === false);
-      setGooglePlacesUnavailable(result.googlePlacesConfigured === false);
-    } catch (error) {
-      if (searchId !== pharmacySearchId.current) return;
-      setPharmacyLocationError(error instanceof Error ? error.message : "Could not determine location or find nearby pharmacies.");
-    } finally {
-      if (searchId === pharmacySearchId.current) setLoadingPharmacies(false);
-    }
-  };
-
   const searchPharmaciesByAddress = async (
     country: string,
     state: string,
     district: string,
     village: string,
+    postalCode: string,
   ) => {
     const searchId = ++pharmacySearchId.current;
     const area = [village, district, state, country].map((part) => part.trim()).filter(Boolean).join(", ");
@@ -148,23 +126,27 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     setPharmacyMapsUnavailable(false);
     setGooglePlacesUnavailable(false);
     setNearbyPharmacies([]);
-    setPharmacyLocation(`Searching within ${PHARMACY_SEARCH_RADIUS_KM} km of ${area}`);
+    setPharmacyLocation(`Searching for pharmacies in ${area}`);
     try {
-      const location = await get<{ lat: number; lng: number; label: string }>(`/places/geocode?q=${encodeURIComponent(area)}`);
+      const result = await get<{
+        shops: any[];
+        area: string;
+        center: { lat: number; lng: number };
+        mapListingsAvailable?: boolean;
+        googlePlacesConfigured?: boolean;
+      }>(`/places/pharmacies/search?${new URLSearchParams({
+        country,
+        state,
+        district,
+        village,
+        ...(postalCode.trim() ? { postalCode: postalCode.trim() } : {}),
+      })}`);
       if (searchId !== pharmacySearchId.current) return;
-      setForm((previous) => ({ ...previous, lat: String(location.lat), lng: String(location.lng) }));
-      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean; googlePlacesConfigured?: boolean }>(
-        `/places/pharmacies?${new URLSearchParams({
-          lat: String(location.lat),
-          lng: String(location.lng),
-          radiusKm: String(PHARMACY_SEARCH_RADIUS_KM),
-        })}`
-      );
-      if (searchId !== pharmacySearchId.current) return;
+      setForm((previous) => ({ ...previous, lat: String(result.center.lat), lng: String(result.center.lng) }));
       setNearbyPharmacies(result.shops);
       setPharmacyMapsUnavailable(result.mapListingsAvailable === false);
       setGooglePlacesUnavailable(result.googlePlacesConfigured === false);
-      setPharmacyLocation(`Showing shops near ${village || district || state}, ${country}`);
+      setPharmacyLocation(`Showing shops in ${result.area}`);
     } catch (error) {
       if (searchId !== pharmacySearchId.current) return;
       setPharmacyLocation("");
@@ -180,12 +162,13 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     setPharmacyState("");
     setPharmacyDistrict("");
     setPharmacyVillage("");
+    setPharmacyPostalCode("");
     setCustomPharmacyVillage("");
     setNearbyPharmacies([]);
     setPharmacyLocation("");
     setPharmacyLocationError("");
     setLoadingPharmacies(false);
-    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+    clearSelectedPharmacy();
   };
 
   const handlePharmacyStateChange = (state: string) => {
@@ -193,22 +176,24 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     setPharmacyState(state);
     setPharmacyDistrict("");
     setPharmacyVillage("");
+    setPharmacyPostalCode("");
     setCustomPharmacyVillage("");
     setNearbyPharmacies([]);
     setPharmacyLocation("");
     setLoadingPharmacies(false);
-    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+    clearSelectedPharmacy();
   };
 
   const handlePharmacyDistrictChange = (district: string) => {
     pharmacySearchId.current++;
     setPharmacyDistrict(district);
     setPharmacyVillage("");
+    setPharmacyPostalCode("");
     setCustomPharmacyVillage("");
     setNearbyPharmacies([]);
     setPharmacyLocation("");
     setLoadingPharmacies(false);
-    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+    clearSelectedPharmacy();
   };
 
   const handlePharmacyVillageChange = (village: string) => {
@@ -217,24 +202,26 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     if (village === "__custom__") {
       setCustomPharmacyVillage("__custom__");
       setPharmacyVillage("");
+      setPharmacyPostalCode("");
       setNearbyPharmacies([]);
       setPharmacyLocation("");
-      setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+      clearSelectedPharmacy();
       return;
     }
     setCustomPharmacyVillage("");
     setPharmacyVillage(village);
-    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+    setPharmacyPostalCode("");
+    clearSelectedPharmacy();
   };
 
   useEffect(() => {
     if (mode !== "register" || role !== "pharmacy" || !pharmacyCountry || !pharmacyState || !pharmacyDistrict || pharmacyVillage.trim().length < 2) return;
     if (customPharmacyVillage === "__custom__") return;
     const timer = window.setTimeout(() => {
-      void searchPharmaciesByAddress(pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage);
+      void searchPharmaciesByAddress(pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage, pharmacyPostalCode);
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [mode, role, pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage, customPharmacyVillage]);
+  }, [mode, role, pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage, pharmacyPostalCode, customPharmacyVillage]);
 
   const selectPharmacy = (shop: any) => {
     setForm((previous) => ({
@@ -326,6 +313,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           businessName: form.businessName,
           licenseNo: form.licenseNo?.trim() || undefined,
           address: form.address,
+          postalCode: pharmacyPostalCode.trim() || undefined,
           placeId: form.placeId || undefined,
           lat: form.lat ? Number(form.lat) : undefined,
           lng: form.lng ? Number(form.lng) : undefined,
@@ -611,7 +599,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                       setNearbyPharmacies([]);
                       setPharmacyLocation("");
                       setPharmacyLocationError("");
-                      setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+                      clearSelectedPharmacy();
                     }} placeholder="Enter state / province" required disabled={!pharmacyCountry} />
                   )}
                 </div>
@@ -630,7 +618,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                       setNearbyPharmacies([]);
                       setPharmacyLocation("");
                       setPharmacyLocationError("");
-                      setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+                      clearSelectedPharmacy();
                     }} placeholder="Enter district / county" required disabled={!pharmacyState} />
                   )}
                 </div>
@@ -660,8 +648,9 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                             setPharmacyLocationError("");
                             setCustomPharmacyVillage(event.target.value);
                             setPharmacyVillage(event.target.value);
+                            setPharmacyPostalCode("");
                             setNearbyPharmacies([]);
-                            setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+                            clearSelectedPharmacy();
                           }}
                           placeholder="Enter village or locality"
                           required
@@ -677,8 +666,9 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                         setPharmacyLocation("");
                         setPharmacyLocationError("");
                         setPharmacyVillage(event.target.value);
+                        setPharmacyPostalCode("");
                         setNearbyPharmacies([]);
-                        setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+                        clearSelectedPharmacy();
                       }}
                       placeholder="Enter village / locality"
                       required
@@ -687,18 +677,32 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   )}
                 </div>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                <strong><MapPin size={15} /> Medical shops within {PHARMACY_SEARCH_RADIUS_KM} km</strong>
-                <button type="button" className="outline-button" onClick={() => void locatePharmacy()} disabled={loadingPharmacies}>
-                  <LocateFixed size={14} /> {loadingPharmacies ? "Finding…" : "Use my location"}
-                </button>
+              <Field label="Pincode / postal code" hint="Optional, but helps narrow shops to the correct locality">
+                <input
+                  value={pharmacyPostalCode}
+                  onChange={(event) => {
+                    pharmacySearchId.current++;
+                    setLoadingPharmacies(false);
+                    setPharmacyPostalCode(event.target.value);
+                    setNearbyPharmacies([]);
+                    setPharmacyLocation("");
+                    setPharmacyLocationError("");
+                    clearSelectedPharmacy();
+                  }}
+                  placeholder="Enter pincode or postal code"
+                  autoComplete="postal-code"
+                  maxLength={12}
+                />
+              </Field>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <strong><MapPin size={15} /> Medical shops in the selected village</strong>
               </div>
-              <small className="muted">{pharmacyLocation || "Choose your country, state, district and village/locality to search nearby medical shops."}</small>
+              <small className="muted">{pharmacyLocation || "Choose your country, state, district and village/locality to search shops in that area."}</small>
               {pharmacyCountry && pharmacyState && pharmacyDistrict && (customPharmacyVillage || pharmacyCountry !== "India") && (
                 <button
                   type="button"
                   className="button button-small"
-                  onClick={() => void searchPharmaciesByAddress(pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage)}
+                  onClick={() => void searchPharmaciesByAddress(pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage, pharmacyPostalCode)}
                   disabled={loadingPharmacies || !pharmacyVillage}
                 >
                   Search medical shops in this area
@@ -707,8 +711,8 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
               {pharmacyLocationError && <Alert kind="warn">{pharmacyLocationError}</Alert>}
               {pharmacyMapsUnavailable && <Alert kind="warn">Map listings are temporarily unavailable. Try again shortly or enter your shop details below.</Alert>}
               {googlePlacesUnavailable && <Alert kind="warn">Google Maps Places is not configured on this server, so only shops listed in OpenStreetMap can appear. For a more complete shop list, configure GOOGLE_MAPS_API_KEY with Places API enabled in the Render environment.</Alert>}
-              {loadingPharmacies ? <Loading label="Finding nearby pharmacies…" /> : nearbyPharmacies.length > 0 ? (
-                <div className="pharmacy-registration-list" role="radiogroup" aria-label="Nearby pharmacy listings">
+              {loadingPharmacies ? <Loading label="Finding pharmacies in this village…" /> : nearbyPharmacies.length > 0 ? (
+                <div className="pharmacy-registration-list" role="radiogroup" aria-label="Pharmacies in the selected village">
                   {nearbyPharmacies.map((shop) => (
                     <button
                       type="button"
@@ -717,7 +721,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                       onClick={() => selectPharmacy(shop)}
                     >
                       <span><strong>{shop.name}</strong><small>{shop.address || "Address not listed"}</small></span>
-                      <small>{shop.distanceKm} km · {shop.orderable ? "Smart Diagno pharmacy" : "Map listing"}</small>
+                      <small>{shop.source === "google" ? "Google Maps listing" : "OpenStreetMap listing"}</small>
                     </button>
                   ))}
                 </div>

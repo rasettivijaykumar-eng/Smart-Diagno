@@ -22,6 +22,7 @@ const registerSchema = z.object({
   qualifications: z.string().trim().max(200).optional(),
   clinic: z.string().trim().max(120).optional(),
   address: z.string().trim().max(200).optional(),
+  postalCode: z.string().trim().min(3).max(12).regex(/^[A-Za-z0-9 -]+$/).optional(),
   businessName: z.string().trim().max(120).optional(),
   placeId: z.string().trim().max(120).optional(),
   ...coords,
@@ -62,7 +63,7 @@ publicRouter.post("/auth/register", (request, response) => {
   if (data.role === "pharmacy") {
     insert("pharmacies", {
       userId: user.id, name: data.businessName, licenseNo: data.licenseNo || "OPTIONAL", address: data.address,
-      placeId: data.placeId, lat: data.lat, lng: data.lng,
+      postalCode: data.postalCode, placeId: data.placeId, lat: data.lat, lng: data.lng,
       hours: "", delivery: false, verification: "pending",
     });
   }

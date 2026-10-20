@@ -29,9 +29,17 @@ type PharmacyMapResults = {
   available: boolean;
 };
 
+type PlaceBounds = {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+};
+
 const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 const cache = new Map<string, { at: number; value: Hospital[] }>();
 const pharmacyCache = new Map<string, { at: number; value: PharmacyMapResults }>();
+const areaPharmacyCache = new Map<string, { at: number; value: { shops: NearbyPharmacy[]; available: boolean; label: string; center: { lat: number; lng: number } } }>();
 const CACHE_MS = 10 * 60 * 1000;
 const DEFAULT_PHARMACY_RADIUS_KM = 29;
 
@@ -221,6 +229,164 @@ async function findOsmPharmacies(lat: number, lng: number, radiusKm: number): Pr
     } catch { /* Try the next Overpass mirror. */ }
   }
   return { shops, available };
+}
+
+function isWithinBounds(lat: number, lng: number, bounds: PlaceBounds) {
+  return lat >= bounds.south && lat <= bounds.north && lng >= bounds.west && lng <= bounds.east;
+}
+
+function matchesPostalCode(address: string, postalCode: string) {
+  const code = postalCode.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const pattern = code.split("").join("[\\s-]*");
+  return new RegExp(`(^|[^a-z0-9])${pattern}($|[^a-z0-9])`, "i").test(address);
+}
+
+async function findPharmaciesInArea(query: string, postalCode: string): Promise<{
+  shops: NearbyPharmacy[];
+  available: boolean;
+  label: string;
+  center: { lat: number; lng: number };
+}> {
+  const areaQuery = [query, postalCode].filter(Boolean).join(", ");
+  const geocodeParams = new URLSearchParams({
+    format: "jsonv2", addressdetails: "1", limit: "1", q: areaQuery,
+  });
+  const geocodeResponse = await fetch(`https://nominatim.openstreetmap.org/search?${geocodeParams}`, {
+    signal: AbortSignal.timeout(8000),
+    headers: { accept: "application/json", "user-agent": "SmartDiagno/1.0 (+https://smart-diagno.onrender.com)" },
+  });
+  if (!geocodeResponse.ok) throw new Error("The selected village or postal code could not be looked up.");
+  const geocoded: any[] = await geocodeResponse.json();
+  const place = geocoded[0];
+  if (!place || !Array.isArray(place.boundingbox) || place.boundingbox.length !== 4) {
+    throw new Error("We couldn't find this village. Check the spelling, district and postal code.");
+  }
+  const bounds: PlaceBounds = {
+    south: Number(place.boundingbox[0]),
+    north: Number(place.boundingbox[1]),
+    west: Number(place.boundingbox[2]),
+    east: Number(place.boundingbox[3]),
+  };
+  if (Object.values(bounds).some((value) => !Number.isFinite(value))) {
+    throw new Error("The selected village did not return a valid map area.");
+  }
+  const center = { lat: Number(place.lat), lng: Number(place.lon) };
+  if (!Number.isFinite(center.lat) || !Number.isFinite(center.lng)) {
+    throw new Error("The selected village did not return a valid map location.");
+  }
+
+  const shops: NearbyPharmacy[] = [];
+  let available = false;
+  const googleKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (googleKey) {
+    try {
+      const googleResponse = await fetch("https://places.googleapis.com/v1/places:searchText", {
+        method: "POST",
+        signal: AbortSignal.timeout(8000),
+        headers: {
+          "content-type": "application/json",
+          "X-Goog-Api-Key": googleKey,
+          "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.nationalPhoneNumber,places.googleMapsUri",
+        },
+        body: JSON.stringify({
+          textQuery: `pharmacy in ${areaQuery}`,
+          includedType: "pharmacy",
+          strictTypeFiltering: true,
+          maxResultCount: 20,
+          locationBias: {
+            rectangle: {
+              low: { latitude: bounds.south, longitude: bounds.west },
+              high: { latitude: bounds.north, longitude: bounds.east },
+            },
+          },
+        }),
+      });
+      if (googleResponse.ok) {
+        available = true;
+        const body: any = await googleResponse.json();
+        for (const item of body.places ?? []) {
+          const lat = item.location?.latitude, lng = item.location?.longitude;
+          const address = String(item.formattedAddress ?? "");
+          if (typeof lat !== "number" || typeof lng !== "number" || !isWithinBounds(lat, lng, bounds)) continue;
+          if (postalCode && !matchesPostalCode(address, postalCode)) continue;
+          const name = item.displayName?.text ?? "Pharmacy";
+          shops.push({
+            id: `g:${item.id}`,
+            name,
+            address,
+            lat,
+            lng,
+            distanceKm: 0,
+            source: "google",
+            orderable: false,
+            directionsUrl: directions(lat, lng, item.id),
+            mapsUrl: item.googleMapsUri ?? mapsLink(name, lat, lng),
+            phone: item.nationalPhoneNumber,
+          });
+        }
+      }
+    } catch { /* Continue with map-data fallback. */ }
+  }
+
+  const overpassQuery = `[out:json][timeout:15];(nwr["amenity"="pharmacy"](${bounds.south},${bounds.west},${bounds.north},${bounds.east});nwr["shop"="chemist"](${bounds.south},${bounds.west},${bounds.north},${bounds.east}););out center tags 200;`;
+  for (const endpoint of OVERPASS) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        signal: AbortSignal.timeout(12000),
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "user-agent": "SmartDiagno/1.0 (+https://smart-diagno.onrender.com)",
+        },
+        body: `data=${encodeURIComponent(overpassQuery)}`,
+      });
+      if (!response.ok) continue;
+      available = true;
+      const body: any = await response.json();
+      for (const item of body.elements ?? []) {
+        const lat = item.lat ?? item.center?.lat, lng = item.lon ?? item.center?.lon;
+        const tags = item.tags ?? {};
+        if (typeof lat !== "number" || typeof lng !== "number" || !isWithinBounds(lat, lng, bounds)) continue;
+        const addressParts = [
+          tags["addr:street"],
+          tags["addr:suburb"] ?? tags["addr:neighbourhood"],
+          tags["addr:city"] ?? tags["addr:town"] ?? tags["addr:village"],
+          tags["addr:postcode"],
+        ].filter(Boolean);
+        const address = addressParts.join(", ");
+        if (postalCode && tags["addr:postcode"] && !matchesPostalCode(tags["addr:postcode"], postalCode)) continue;
+        const name = tags.name ?? tags["name:en"] ?? "Pharmacy";
+        shops.push({
+          id: `osm:${item.type}/${item.id}`,
+          name,
+          address,
+          lat,
+          lng,
+          distanceKm: 0,
+          source: "openstreetmap",
+          orderable: false,
+          directionsUrl: directions(lat, lng),
+          mapsUrl: mapsLink(name, lat, lng),
+          phone: tags.phone ?? tags["contact:phone"],
+        });
+      }
+      if (shops.length) break;
+    } catch { /* Try another map-data mirror. */ }
+  }
+
+  const unique = mergePharmacies(
+    shops.filter((shop) => {
+      const name = shop.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+      return !shops.some((other) =>
+        other !== shop
+        && other.name.toLowerCase().replace(/[^a-z0-9]/g, "") === name
+        && distanceKm(shop.lat, shop.lng, other.lat, other.lng) < 0.1
+        && other.source === "google"
+        && shop.source === "openstreetmap"
+      );
+    })
+  );
+  return { shops: unique, available, label: String(place.display_name ?? areaQuery), center };
 }
 
 async function fromGoogle(lat: number, lng: number, radiusM: number): Promise<Hospital[] | null> {
@@ -781,6 +947,52 @@ placesRouter.get("/places/pharmacies", async (request, response) => {
     mapListingsAvailable: mapResults.available,
     googlePlacesConfigured: Boolean(process.env.GOOGLE_MAPS_API_KEY),
   });
+});
+
+placesRouter.get("/places/pharmacies/search", async (request, response) => {
+  const query = z.object({
+    country: z.string().trim().min(2).max(80),
+    state: z.string().trim().max(80).optional(),
+    district: z.string().trim().max(80).optional(),
+    village: z.string().trim().min(2).max(100),
+    postalCode: z.string().trim().min(3).max(12).regex(/^[A-Za-z0-9 -]+$/).optional(),
+  }).safeParse(request.query);
+  if (!query.success) return response.status(400).json({ error: "Select a valid country, village and optional postal code." });
+  if (!rateLimit(`pharmacy-area:${request.ip}`, 30, 60_000)) {
+    return response.status(429).json({ error: "Too many pharmacy searches. Please wait a minute." });
+  }
+
+  const { country, state, district, village, postalCode } = query.data;
+  const area = [village, district, state, country].filter(Boolean).join(", ");
+  const cacheKey = `${area.toLowerCase()}|${postalCode?.toLowerCase() ?? ""}`;
+  const cached = areaPharmacyCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < CACHE_MS) {
+    return response.json({
+      shops: cached.value.shops,
+      area: cached.value.label,
+      center: cached.value.center,
+      mapListingsAvailable: cached.value.available,
+      googlePlacesConfigured: Boolean(process.env.GOOGLE_MAPS_API_KEY),
+    });
+  }
+  if (!rateLimit("nominatim-pharmacy-area-geocode", 1, 1000)) {
+    return response.status(429).json({ error: "Location search is busy. Please wait a moment and try again." });
+  }
+
+  try {
+    const result = await findPharmaciesInArea(area, postalCode ?? "");
+    const value = { shops: result.shops, available: result.available, label: result.label, center: result.center };
+    if (result.available) areaPharmacyCache.set(cacheKey, { at: Date.now(), value });
+    response.json({
+      shops: result.shops,
+      area: result.label,
+      center: result.center,
+      mapListingsAvailable: result.available,
+      googlePlacesConfigured: Boolean(process.env.GOOGLE_MAPS_API_KEY),
+    });
+  } catch (error) {
+    response.status(502).json({ error: error instanceof Error ? error.message : "Could not search pharmacies in this area." });
+  }
 });
 
 // Auto-detect client location via IP

@@ -40,7 +40,7 @@ describe("Smart Diagno platform", () => {
     assert.equal((await patient.call("POST", "/api/auth/register", { name: "Pat One", email: "pat@test.local", password: PASSWORD, role: "patient" })).status, 201);
     assert.equal((await other.call("POST", "/api/auth/register", { name: "Pat Two", email: "pat2@test.local", password: PASSWORD, role: "patient" })).status, 201);
     assert.equal((await doctor.call("POST", "/api/auth/register", { name: "Dr Test", email: "doc@test.local", password: PASSWORD, role: "doctor", specialty: "General Physician", licenseNo: "L1", qualifications: "MBBS" })).status, 201);
-    assert.equal((await pharmacy.call("POST", "/api/auth/register", { name: "Pharma", email: "ph@test.local", password: PASSWORD, role: "pharmacy", businessName: "Test Pharmacy", licenseNo: "P1", address: "Somewhere", placeId: "test-place", lat: 12.9716, lng: 77.5946 })).status, 201);
+    assert.equal((await pharmacy.call("POST", "/api/auth/register", { name: "Pharma", email: "ph@test.local", password: PASSWORD, role: "pharmacy", businessName: "Test Pharmacy", licenseNo: "P1", address: "Somewhere", postalCode: "517581", placeId: "test-place", lat: 12.9716, lng: 77.5946 })).status, 201);
     assert.equal((await unverifiedPharmacy.call("POST", "/api/auth/register", { name: "Unverified Pharma", email: "unverified-ph@test.local", password: PASSWORD, role: "pharmacy", businessName: "Unverified Pharmacy", address: "Somewhere else" })).status, 201);
     assert.equal((await new Client().call("POST", "/api/auth/login", { email: "pat@test.local", password: "wrong-password-1" })).status, 401);
     assert.equal((await admin.call("POST", "/api/auth/login", { email: "admin@test.local", password: "Admin-pass-12345" })).status, 200);
@@ -69,6 +69,7 @@ describe("Smart Diagno platform", () => {
     const phUserId = (await pharmacy.call("GET", "/api/me")).body.user.id;
     await admin.call("POST", `/api/admin/verifications/${phUserId}`, { decision: "verified" });
     pharmacyProfileId = (await pharmacy.call("GET", "/api/pharmacy/profile")).body.profile.id;
+    assert.equal((await pharmacy.call("GET", "/api/pharmacy/profile")).body.profile.postalCode, "517581");
   });
 
   it("requires a location for nearby search and applies the 20 km radius", async () => {
@@ -129,6 +130,42 @@ describe("Smart Diagno platform", () => {
       const callsAfterInitialSearch = providerCalls;
       assert.equal((await client.call("GET", path)).body.shops.length, 2);
       assert.equal(providerCalls, callsAfterInitialSearch);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("limits pharmacy registration results to the selected village and postal code", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url.startsWith(baseUrl)) return originalFetch(input, init);
+      if (url.startsWith("https://nominatim.openstreetmap.org/search?")) {
+        const params = new URL(url).searchParams;
+        assert.match(params.get("q") ?? "", /Narayanavanam.*517581/);
+        return new Response(JSON.stringify([{
+          lat: "13.4251452",
+          lon: "79.5875358",
+          display_name: "Narayanavanam, Tirupati, Andhra Pradesh, 517581, India",
+          boundingbox: ["13.40", "13.45", "79.55", "79.62"],
+        }]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.startsWith("https://overpass-api.de/") || url.startsWith("https://overpass.kumi.systems/")) {
+        return new Response(JSON.stringify({ elements: [
+          { type: "node", id: 1, lat: 13.42, lon: 79.58, tags: { name: "Local Medicals", amenity: "pharmacy", "addr:postcode": "517581" } },
+          { type: "node", id: 2, lat: 13.42, lon: 79.58, tags: { name: "Other Postal Area Pharmacy", amenity: "pharmacy", "addr:postcode": "517502" } },
+          { type: "node", id: 3, lat: 13.50, lon: 79.58, tags: { name: "Outside Village Pharmacy", amenity: "pharmacy", "addr:postcode": "517581" } },
+          { type: "node", id: 4, lat: 13.42, lon: 79.58, tags: { name: "Similar Postal Code Pharmacy", amenity: "pharmacy", "addr:postcode": "5175811" } },
+        ] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("", { status: 503 });
+    };
+    try {
+      const client = new Client();
+      const result = await client.call("GET", "/api/places/pharmacies/search?country=India&state=Andhra%20Pradesh&district=Tirupati&village=Narayanavanam&postalCode=517581");
+      assert.equal(result.status, 200);
+      assert.equal(result.body.center.lat, 13.4251452);
+      assert.deepEqual(result.body.shops.map((shop: any) => shop.name), ["Local Medicals"]);
     } finally {
       globalThis.fetch = originalFetch;
     }
