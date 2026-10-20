@@ -171,7 +171,7 @@ describe("Smart Diagno platform", () => {
       if (url.startsWith("https://nominatim.openstreetmap.org/search?")) {
         const params = new URL(url).searchParams;
         assert.match(params.get("q") ?? "", /Narayanavanam.*India/);
-        assert.match(params.get("q") ?? "", /517581/);
+        assert.doesNotMatch(params.get("q") ?? "", /517581/);
         return new Response(JSON.stringify([{
           lat: "13.4251452",
           lon: "79.5875358",

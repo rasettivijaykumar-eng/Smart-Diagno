@@ -274,7 +274,7 @@ async function findPharmaciesInArea(query: string, postalCode: string, village: 
 }> {
   const areaQuery = query;
   const geocodeParams = new URLSearchParams({
-    format: "jsonv2", addressdetails: "1", limit: "1", q: `${areaQuery}, ${postalCode}`,
+    format: "jsonv2", addressdetails: "1", limit: "1", q: areaQuery,
   });
   const geocodeResponse = await fetch(`https://nominatim.openstreetmap.org/search?${geocodeParams}`, {
     signal: AbortSignal.timeout(8000),
