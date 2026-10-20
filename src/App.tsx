@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Bell, Boxes, CalendarDays, ClipboardList, FileText, HeartPulse, Home, LogOut, MessageCircleHeart, MessageSquare, Pill, Settings, ShieldCheck, ShoppingBag, Stethoscope, Store, Users, Flag, ScrollText, Clock, UserCog } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Bell, Boxes, CalendarDays, ClipboardList, FileText, HeartPulse, Home, LogOut, MessageCircleHeart, MessageSquare, Pill, Settings, ShieldCheck, ShoppingBag, Stethoscope, Store, Users, Flag, ScrollText, Clock, UserCog, Menu, X } from "lucide-react";
 import { get, post } from "./api";
 import { AdminOverview, AuditLog, Complaints, Users as AdminUsers, Verifications } from "./Admin";
 import { AuthPage } from "./AuthPage";
@@ -63,11 +63,58 @@ function Notifications() {
 function Dashboard() {
   const { user, profile, logout } = useAuth();
   const { path, search } = useLocation();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    const background = shellRef.current?.querySelectorAll<HTMLElement>(".shell-main, .tabbar");
+    background?.forEach((element) => element.setAttribute("inert", ""));
+    document.body.style.overflow = "hidden";
+    drawerRef.current?.querySelector<HTMLElement>(".mobile-drawer-close")?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    const mobileViewport = window.matchMedia("(max-width: 820px)");
+    const closeOnDesktop = (event: MediaQueryListEvent) => {
+      if (!event.matches) setMobileNavOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    mobileViewport.addEventListener("change", closeOnDesktop);
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      mobileViewport.removeEventListener("change", closeOnDesktop);
+      document.body.style.overflow = previousOverflow;
+      background?.forEach((element) => element.removeAttribute("inert"));
+      (menuButtonRef.current ?? previousFocus)?.focus();
+    };
+  }, [mobileNavOpen]);
+
   if (!user) return null;
   const items = nav[user.role];
   const section = path.replace(/^\/app\/?/, "").split("/")[0];
   const current = items.find((i) => i.path === section);
   const pending = (user.role === "doctor" || user.role === "pharmacy") && profile && profile.verification !== "verified";
+
+  const trapDrawerFocus = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab" || !drawerRef.current) return;
+    const focusable = Array.from(drawerRef.current.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ));
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   const body = (): ReactNode => {
     if (!current) return <Alert kind="warn">That page doesn't exist. <Link to="/app">Go to your dashboard</Link>.</Alert>;
@@ -101,7 +148,7 @@ function Dashboard() {
   };
 
   return (
-    <div className="shell">
+    <div className="shell" ref={shellRef}>
       <aside className="sidebar">
         <Brand />
         <nav aria-label="Dashboard">
@@ -109,20 +156,66 @@ function Dashboard() {
         </nav>
         <p className="sidebar-note">Not for emergencies. In an emergency call your local emergency number.</p>
       </aside>
-      <div className="shell-main">
+      <div className="shell-main" aria-hidden={mobileNavOpen ? true : undefined}>
         <header className="topbar">
-          <div><span className="small-kicker">{humanize(user.role)} dashboard</span><h1>{current?.label ?? "Not found"}</h1></div>
+          <div className="topbar-heading">
+            <button
+              ref={menuButtonRef}
+              type="button"
+              className="mobile-menu-button"
+              aria-label="Open dashboard navigation"
+              aria-expanded={mobileNavOpen}
+              aria-controls="mobile-dashboard-drawer"
+              onClick={() => setMobileNavOpen(true)}
+            ><Menu size={20} /></button>
+            <div><span className="small-kicker">{humanize(user.role)} dashboard</span><h1>{current?.label ?? "Not found"}</h1></div>
+          </div>
           <div className="topbar-right"><span className="user-chip">{user.name}</span><Notifications />
-            <button className="outline-button" onClick={async () => { await logout(); navigate("/"); }}><LogOut size={15} /> Sign out</button></div>
+            <button className="outline-button" aria-label="Sign out" onClick={async () => { await logout(); navigate("/"); }}><LogOut size={15} /> Sign out</button></div>
         </header>
         <main id="main" className="content">
           {pending && <Alert kind="warn"><strong>Verification {profile.verification === "rejected" ? "was not approved" : "pending"}.</strong> You can complete your profile now, but listings, bookings, prescribing and orders stay disabled until an administrator verifies you. <Badge tone="warn">{humanize(profile.verification)}</Badge>{profile.verificationNote ? ` Note: ${profile.verificationNote}` : ""}</Alert>}
           {body()}
         </main>
       </div>
-      <nav className="tabbar" aria-label="Dashboard (mobile)">
+      <nav className="tabbar" aria-label="Dashboard (mobile)" aria-hidden={mobileNavOpen ? true : undefined}>
         {items.slice(0, 5).map((i) => <Link key={i.path} to={`/app${i.path ? "/" + i.path : ""}`} className={i.path === section ? "active" : ""} aria-current={i.path === section ? "page" : undefined}>{i.icon}<span>{i.label}</span></Link>)}
       </nav>
+      {mobileNavOpen && (
+        <div
+          className="mobile-drawer-backdrop"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setMobileNavOpen(false); }}
+        >
+          <aside
+            id="mobile-dashboard-drawer"
+            ref={drawerRef}
+            className="mobile-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Dashboard navigation"
+            onKeyDown={trapDrawerFocus}
+          >
+            <header className="mobile-drawer-header">
+              <div className="mobile-drawer-brand"><Brand /><strong>Smart Diagno</strong></div>
+              <button type="button" className="icon-btn mobile-drawer-close" aria-label="Close dashboard navigation" onClick={() => setMobileNavOpen(false)}>
+                <X size={20} />
+              </button>
+            </header>
+            <nav aria-label="Dashboard">
+              {items.map((i) => (
+                <Link
+                  key={i.path}
+                  to={`/app${i.path ? "/" + i.path : ""}`}
+                  className={i.path === section ? "active" : ""}
+                  aria-current={i.path === section ? "page" : undefined}
+                  onClickCapture={() => setMobileNavOpen(false)}
+                >{i.icon}<span>{i.label}</span></Link>
+              ))}
+            </nav>
+            <p className="sidebar-note">Not for emergencies. In an emergency call your local emergency number.</p>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

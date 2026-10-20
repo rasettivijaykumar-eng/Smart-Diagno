@@ -301,14 +301,18 @@ export function Assistant() {
             <ul className="chat-history-list">
               {chats.map((c) => (
                 <li key={c.id}>
-                  <div
-                    className={`chat-history-item ${activeChatId === c.id ? "active" : ""}`}
-                    onClick={() => selectChat(c.id)}
-                  >
+                  <div className={`chat-history-item ${activeChatId === c.id ? "active" : ""}`}>
+                    <button
+                      type="button"
+                      className="chat-history-select"
+                      onClick={() => selectChat(c.id)}
+                      aria-pressed={activeChatId === c.id}
+                    >
                     <div className="chat-history-item-content">
                       <strong>{c.title}</strong>
                       <small>{fmtDateTime(c.updatedAt)} · {c.count} messages</small>
                     </div>
+                    </button>
                     <button
                       type="button"
                       className="chat-history-delete"
