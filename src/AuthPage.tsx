@@ -51,6 +51,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [hospFilter, setHospFilter] = useState("");
   const [customClinic, setCustomClinic] = useState(false);
   const [nearbyPharmacies, setNearbyPharmacies] = useState<any[]>([]);
+  const [pharmacyMapsUnavailable, setPharmacyMapsUnavailable] = useState(false);
   const [loadingPharmacies, setLoadingPharmacies] = useState(false);
   const [pharmacyLocation, setPharmacyLocation] = useState("");
   const [pharmacyLocationError, setPharmacyLocationError] = useState("");
@@ -92,6 +93,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const locatePharmacy = async () => {
     setLoadingPharmacies(true);
     setPharmacyLocationError("");
+    setPharmacyMapsUnavailable(false);
     try {
       let coordinates: { lat: number; lng: number };
       try {
@@ -103,8 +105,9 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         setPharmacyLocation(`Using approximate location: ${fallback.label}`);
       }
       setForm((previous) => ({ ...previous, lat: String(coordinates.lat), lng: String(coordinates.lng) }));
-      const result = await get<{ shops: any[] }>(`/places/pharmacies?${new URLSearchParams({ lat: String(coordinates.lat), lng: String(coordinates.lng), radiusKm: "20" })}`);
+      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean }>(`/places/pharmacies?${new URLSearchParams({ lat: String(coordinates.lat), lng: String(coordinates.lng), radiusKm: "20" })}`);
       setNearbyPharmacies(result.shops);
+      setPharmacyMapsUnavailable(result.mapListingsAvailable === false);
     } catch (error) {
       setPharmacyLocationError(error instanceof Error ? error.message : "Could not determine location or find nearby pharmacies.");
     } finally {
@@ -475,6 +478,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
               </div>
               <small className="muted">{pharmacyLocation || "Allow location access to search within 20 km. You can enter your shop manually below."}</small>
               {pharmacyLocationError && <Alert kind="warn">{pharmacyLocationError}</Alert>}
+              {pharmacyMapsUnavailable && <Alert kind="warn">Map listings are temporarily unavailable. Try again shortly or enter your shop details below.</Alert>}
               {loadingPharmacies ? <Loading label="Finding nearby pharmacies…" /> : nearbyPharmacies.length > 0 ? (
                 <div className="pharmacy-registration-list" role="radiogroup" aria-label="Nearby pharmacy listings">
                   {nearbyPharmacies.map((shop) => (
@@ -489,7 +493,8 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                     </button>
                   ))}
                 </div>
-              ) : !pharmacyLocationError ? <small className="muted">No pharmacies were found nearby. Enter your shop details below.</small> : null}
+              ) : !pharmacyLocationError && !pharmacyMapsUnavailable ? <small className="muted">No pharmacies were found nearby. Enter your shop details below.</small> : null}
+              {nearbyPharmacies.some((shop) => shop.source === "openstreetmap") && <small className="muted">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a></small>}
             </div>
             <Field label="Business name"><input value={form.businessName ?? ""} onChange={set("businessName")} required /></Field>
             <Field label="Pharmacy licence number (optional)" hint="Optional for college project / demonstration"><input value={form.licenseNo ?? ""} onChange={set("licenseNo")} placeholder="e.g. PH-12345 (leave blank if not available)" /></Field>

@@ -84,6 +84,46 @@ describe("Smart Diagno platform", () => {
     assert.equal((await anon.call("GET", "/api/pharmacies?lat=19.07&lng=72.87&radiusKm=20")).body.pharmacies.length, 0);
   });
 
+  it("finds map-listed pharmacies through the Nominatim fallback and enforces its radius", async () => {
+    const originalFetch = globalThis.fetch;
+    let providerCalls = 0;
+    globalThis.fetch = async (input, _init) => {
+      const url = String(input);
+      if (url.startsWith(baseUrl)) return originalFetch(input, _init);
+      providerCalls++;
+      if (url.startsWith("https://nominatim.openstreetmap.org/search?")) {
+        return new Response(JSON.stringify([
+          {
+            osm_type: "node", osm_id: 123, type: "pharmacy", name: "Nearby Pharmacy",
+            lat: "17.385", lon: "78.459", display_name: "Nearby Pharmacy, Hyderabad",
+            address: { road: "Main Road", city: "Hyderabad" },
+          },
+          {
+            osm_type: "node", osm_id: 124, type: "pharmacy", name: "Far Pharmacy",
+            lat: "18.2", lon: "78.459", display_name: "Far Pharmacy, Telangana",
+            address: { road: "Far Road", city: "Outside radius" },
+          },
+        ]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("", { status: 503 });
+    };
+    try {
+      const client = new Client();
+      const path = "/api/places/pharmacies?lat=17.3843&lng=78.4583&radiusKm=20";
+      const response = await client.call("GET", path);
+      assert.equal(response.status, 200);
+      assert.equal(response.body.mapListingsAvailable, true);
+      assert.equal(response.body.shops.length, 1);
+      assert.equal(response.body.shops[0].name, "Nearby Pharmacy");
+      assert.equal(response.body.shops[0].source, "openstreetmap");
+      const callsAfterInitialSearch = providerCalls;
+      assert.equal((await client.call("GET", path)).body.shops.length, 1);
+      assert.equal(providerCalls, callsAfterInitialSearch);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("prevents double booking of a slot", async () => {
     slotId = (await doctor.call("POST", "/api/doctor/slots", { start: inTwoDays(), mode: "offline" })).body.slot.id;
     assert.equal((await doctor.call("POST", "/api/doctor/slots", { start: inTwoDays(), mode: "offline" })).status, 409);

@@ -1268,6 +1268,7 @@ export function Orders() {
   const list = useLoad(() => get<{ orders: any[] }>("/orders"), []);
   const prescriptions = useLoad(() => get<{ prescriptions: Rx[] }>("/prescriptions"), []);
   const [shops, setShops] = useState<any[]>([]);
+  const [mapListingsUnavailable, setMapListingsUnavailable] = useState(false);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locationLabel, setLocationLabel] = useState("Finding your location…");
   const [locationError, setLocationError] = useState("");
@@ -1286,8 +1287,9 @@ export function Orders() {
   const loadNearby = async (lat: number, lng: number) => {
     setNearbyLoading(true);
     try {
-      const result = await get<{ shops: any[] }>(`/places/pharmacies?${new URLSearchParams({ lat: String(lat), lng: String(lng), radiusKm: "20" })}`);
+      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean }>(`/places/pharmacies?${new URLSearchParams({ lat: String(lat), lng: String(lng), radiusKm: "20" })}`);
       setShops(result.shops);
+      setMapListingsUnavailable(result.mapListingsAvailable === false);
     } catch (error) {
       setLocationError(error instanceof Error ? error.message : "Nearby shops could not be loaded.");
     } finally {
@@ -1298,6 +1300,7 @@ export function Orders() {
   const locateNearby = async () => {
     setNearbyLoading(true);
     setLocationError("");
+    setMapListingsUnavailable(false);
     setPharmacyId("");
     setConsent(false);
     try {
@@ -1388,8 +1391,9 @@ export function Orders() {
         {locationError && <Alert kind="warn">{locationError}</Alert>}
         <section className="nearby-pharmacy-section">
           <strong>Choose a pharmacy</strong>
+          {mapListingsUnavailable && <Alert kind="warn">Map listings are temporarily unavailable. Try refreshing your location shortly.</Alert>}
           {nearbyLoading ? <Loading label="Finding nearby medical shops…" /> : shops.length === 0 ? (
-            <Empty title="No nearby pharmacies found" text="Try refreshing your location. Map-listed shops can be viewed, but only verified Smart Diagno pharmacies can receive requests." />
+            <Empty title={mapListingsUnavailable ? "Could not load nearby pharmacies" : "No nearby pharmacies found"} text={mapListingsUnavailable ? "The map provider could not be reached. Please refresh your location and try again." : "Try refreshing your location. Map-listed shops can be viewed, but only verified Smart Diagno pharmacies can receive requests."} />
           ) : (
             <div className="nearby-pharmacy-list">
               {shops.map((shop) => (
@@ -1403,6 +1407,7 @@ export function Orders() {
               ))}
             </div>
           )}
+          {shops.some((shop) => shop.source === "openstreetmap") && <small className="muted">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a></small>}
           {coords && <small className="muted">Location coordinates: {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}</small>}
         </section>
         <Field label="Doctor prescription (optional)">
