@@ -55,6 +55,12 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [loadingPharmacies, setLoadingPharmacies] = useState(false);
   const [pharmacyLocation, setPharmacyLocation] = useState("");
   const [pharmacyLocationError, setPharmacyLocationError] = useState("");
+  const [pharmacyCountry, setPharmacyCountry] = useState("");
+  const [pharmacyState, setPharmacyState] = useState("");
+  const [pharmacyDistrict, setPharmacyDistrict] = useState("");
+  const [pharmacyVillage, setPharmacyVillage] = useState("");
+  const [customPharmacyVillage, setCustomPharmacyVillage] = useState("");
+  const pharmacySearchId = useRef(0);
   const [showPassword, setShowPassword] = useState(false);
 
   // Cascading location state
@@ -91,6 +97,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   };
 
   const locatePharmacy = async () => {
+    const searchId = ++pharmacySearchId.current;
     setLoadingPharmacies(true);
     setPharmacyLocationError("");
     setPharmacyMapsUnavailable(false);
@@ -104,15 +111,117 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         coordinates = { lat: fallback.lat, lng: fallback.lng };
         setPharmacyLocation(`Using approximate location: ${fallback.label}`);
       }
+      if (searchId !== pharmacySearchId.current) return;
       setForm((previous) => ({ ...previous, lat: String(coordinates.lat), lng: String(coordinates.lng) }));
       const result = await get<{ shops: any[]; mapListingsAvailable?: boolean }>(`/places/pharmacies?${new URLSearchParams({ lat: String(coordinates.lat), lng: String(coordinates.lng), radiusKm: String(PHARMACY_SEARCH_RADIUS_KM) })}`);
+      if (searchId !== pharmacySearchId.current) return;
       setNearbyPharmacies(result.shops);
       setPharmacyMapsUnavailable(result.mapListingsAvailable === false);
     } catch (error) {
+      if (searchId !== pharmacySearchId.current) return;
       setPharmacyLocationError(error instanceof Error ? error.message : "Could not determine location or find nearby pharmacies.");
     } finally {
-      setLoadingPharmacies(false);
+      if (searchId === pharmacySearchId.current) setLoadingPharmacies(false);
     }
+  };
+
+  const searchPharmaciesByAddress = async (
+    country: string,
+    state: string,
+    district: string,
+    village: string,
+  ) => {
+    const searchId = ++pharmacySearchId.current;
+    const area = [village, district, state, country].map((part) => part.trim()).filter(Boolean).join(", ");
+    if (!country || (country === "India" && (!state || !district || !village))) {
+      setPharmacyLocationError("Select a country, state, district and village/locality before searching.");
+      setNearbyPharmacies([]);
+      setLoadingPharmacies(false);
+      return;
+    }
+
+    setLoadingPharmacies(true);
+    setPharmacyLocationError("");
+    setPharmacyMapsUnavailable(false);
+    setNearbyPharmacies([]);
+    setPharmacyLocation(`Searching within ${PHARMACY_SEARCH_RADIUS_KM} km of ${area}`);
+    try {
+      const location = await get<{ lat: number; lng: number; label: string }>(`/places/geocode?q=${encodeURIComponent(area)}`);
+      if (searchId !== pharmacySearchId.current) return;
+      setForm((previous) => ({ ...previous, lat: String(location.lat), lng: String(location.lng) }));
+      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean }>(
+        `/places/pharmacies?${new URLSearchParams({
+          lat: String(location.lat),
+          lng: String(location.lng),
+          radiusKm: String(PHARMACY_SEARCH_RADIUS_KM),
+        })}`
+      );
+      if (searchId !== pharmacySearchId.current) return;
+      setNearbyPharmacies(result.shops);
+      setPharmacyMapsUnavailable(result.mapListingsAvailable === false);
+      setPharmacyLocation(`Showing shops near ${village || district || state}, ${country}`);
+    } catch (error) {
+      if (searchId !== pharmacySearchId.current) return;
+      setPharmacyLocation("");
+      setPharmacyLocationError(error instanceof Error ? error.message : "Could not find pharmacies for this location.");
+    } finally {
+      if (searchId === pharmacySearchId.current) setLoadingPharmacies(false);
+    }
+  };
+
+  const handlePharmacyCountryChange = (country: string) => {
+    pharmacySearchId.current++;
+    setPharmacyCountry(country);
+    setPharmacyState("");
+    setPharmacyDistrict("");
+    setPharmacyVillage("");
+    setCustomPharmacyVillage("");
+    setNearbyPharmacies([]);
+    setPharmacyLocation("");
+    setPharmacyLocationError("");
+    setLoadingPharmacies(false);
+    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+  };
+
+  const handlePharmacyStateChange = (state: string) => {
+    pharmacySearchId.current++;
+    setPharmacyState(state);
+    setPharmacyDistrict("");
+    setPharmacyVillage("");
+    setCustomPharmacyVillage("");
+    setNearbyPharmacies([]);
+    setPharmacyLocation("");
+    setLoadingPharmacies(false);
+    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+  };
+
+  const handlePharmacyDistrictChange = (district: string) => {
+    pharmacySearchId.current++;
+    setPharmacyDistrict(district);
+    setPharmacyVillage("");
+    setCustomPharmacyVillage("");
+    setNearbyPharmacies([]);
+    setPharmacyLocation("");
+    setLoadingPharmacies(false);
+    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+  };
+
+  const handlePharmacyVillageChange = (village: string) => {
+    pharmacySearchId.current++;
+    setLoadingPharmacies(false);
+    if (village === "__custom__") {
+      setCustomPharmacyVillage("__custom__");
+      setPharmacyVillage("");
+      setNearbyPharmacies([]);
+      setPharmacyLocation("");
+      setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+      return;
+    }
+    setCustomPharmacyVillage("");
+    setPharmacyVillage(village);
+    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+    setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" }));
+    if (village) void searchPharmaciesByAddress(pharmacyCountry, pharmacyState, pharmacyDistrict, village);
   };
 
   const selectPharmacy = (shop: any) => {
@@ -127,10 +236,6 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     if (mode === "register" && role === "doctor") {
       fetchHospitalsForLocation(selectedCountry, selectedState, selectedDistrict, customVillage || selectedVillage);
     }
-  }, [mode, role]);
-
-  useEffect(() => {
-    if (mode === "register" && role === "pharmacy") void locatePharmacy();
   }, [mode, role]);
 
   const handleCountryChange = (c: string) => {
@@ -470,13 +575,90 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
 
           {mode === "register" && role === "pharmacy" && <>
             <div className="stack" style={{ gap: 8 }}>
+              <strong>Select your shop location</strong>
+              <div className="hospital-cascade-grid">
+                <div className="hospital-cascade-field">
+                  <label>1. Country</label>
+                  <select value={pharmacyCountry} onChange={(event) => handlePharmacyCountryChange(event.target.value)} required>
+                    <option value="">Select country</option>
+                    {COUNTRIES.map((country) => <option key={country.code} value={country.name}>{country.name}</option>)}
+                  </select>
+                </div>
+                <div className="hospital-cascade-field">
+                  <label>2. State / Province</label>
+                  {pharmacyCountry === "India" ? (
+                    <select value={pharmacyState} onChange={(event) => handlePharmacyStateChange(event.target.value)} required disabled={!pharmacyCountry}>
+                      <option value="">Select state</option>
+                      {Object.keys(INDIA_STATES).map((state) => <option key={state} value={state}>{state}</option>)}
+                    </select>
+                  ) : (
+                    <input value={pharmacyState} onChange={(event) => { pharmacySearchId.current++; setLoadingPharmacies(false); setPharmacyState(event.target.value); setNearbyPharmacies([]); setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" })); }} placeholder="Enter state / province" required disabled={!pharmacyCountry} />
+                  )}
+                </div>
+                <div className="hospital-cascade-field">
+                  <label>3. District</label>
+                  {pharmacyCountry === "India" && INDIA_STATES[pharmacyState]?.districts.length ? (
+                    <select value={pharmacyDistrict} onChange={(event) => handlePharmacyDistrictChange(event.target.value)} required disabled={!pharmacyState}>
+                      <option value="">Select district</option>
+                      {INDIA_STATES[pharmacyState].districts.map((district) => <option key={district.name} value={district.name}>{district.name}</option>)}
+                    </select>
+                  ) : (
+                    <input value={pharmacyDistrict} onChange={(event) => { pharmacySearchId.current++; setLoadingPharmacies(false); setPharmacyDistrict(event.target.value); setNearbyPharmacies([]); setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" })); }} placeholder="Enter district / county" required disabled={!pharmacyState} />
+                  )}
+                </div>
+                <div className="hospital-cascade-field">
+                  <label>4. Village / Locality</label>
+                  {pharmacyCountry === "India" && (INDIA_STATES[pharmacyState]?.districts.find((district) => district.name === pharmacyDistrict)?.villages?.length ?? 0) > 0 ? (
+                    <>
+                      <select
+                        value={customPharmacyVillage ? "__custom__" : pharmacyVillage}
+                        onChange={(event) => handlePharmacyVillageChange(event.target.value)}
+                        required
+                        disabled={!pharmacyDistrict}
+                      >
+                        <option value="">Select village / locality</option>
+                        {INDIA_STATES[pharmacyState].districts.find((district) => district.name === pharmacyDistrict)?.villages?.map((village) => (
+                          <option key={village} value={village}>{village}</option>
+                        ))}
+                        <option value="__custom__">Enter another village / locality</option>
+                      </select>
+                      {customPharmacyVillage && (
+                        <input
+                          value={customPharmacyVillage === "__custom__" ? "" : customPharmacyVillage}
+                          onChange={(event) => { pharmacySearchId.current++; setLoadingPharmacies(false); setCustomPharmacyVillage(event.target.value); setPharmacyVillage(event.target.value); setNearbyPharmacies([]); setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" })); }}
+                          placeholder="Enter village or locality"
+                          required
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <input
+                      value={pharmacyVillage}
+                      onChange={(event) => { pharmacySearchId.current++; setLoadingPharmacies(false); setPharmacyVillage(event.target.value); setNearbyPharmacies([]); setForm((previous) => ({ ...previous, placeId: "", lat: "", lng: "" })); }}
+                      placeholder="Enter village / locality"
+                      required
+                      disabled={!pharmacyDistrict}
+                    />
+                  )}
+                </div>
+              </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                <strong><MapPin size={15} /> Nearby medical shops</strong>
+                <strong><MapPin size={15} /> Medical shops within {PHARMACY_SEARCH_RADIUS_KM} km</strong>
                 <button type="button" className="outline-button" onClick={() => void locatePharmacy()} disabled={loadingPharmacies}>
                   <LocateFixed size={14} /> {loadingPharmacies ? "Finding…" : "Use my location"}
                 </button>
               </div>
-              <small className="muted">{pharmacyLocation || `Allow location access to search within ${PHARMACY_SEARCH_RADIUS_KM} km. You can enter your shop manually below.`}</small>
+              <small className="muted">{pharmacyLocation || "Choose your country, state, district and village/locality to search nearby medical shops."}</small>
+              {pharmacyCountry && pharmacyState && pharmacyDistrict && (
+                <button
+                  type="button"
+                  className="button button-small"
+                  onClick={() => void searchPharmaciesByAddress(pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage)}
+                  disabled={loadingPharmacies || !pharmacyVillage}
+                >
+                  Search medical shops in this area
+                </button>
+              )}
               {pharmacyLocationError && <Alert kind="warn">{pharmacyLocationError}</Alert>}
               {pharmacyMapsUnavailable && <Alert kind="warn">Map listings are temporarily unavailable. Try again shortly or enter your shop details below.</Alert>}
               {loadingPharmacies ? <Loading label="Finding nearby pharmacies…" /> : nearbyPharmacies.length > 0 ? (
@@ -493,7 +675,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                     </button>
                   ))}
                 </div>
-              ) : !pharmacyLocationError && !pharmacyMapsUnavailable ? <small className="muted">No pharmacies were found nearby. Enter your shop details below.</small> : null}
+              ) : !loadingPharmacies && pharmacyLocation && !pharmacyLocationError && !pharmacyMapsUnavailable ? <small className="muted">No pharmacies were found in this area. Search again or enter your shop details below.</small> : null}
               {nearbyPharmacies.some((shop) => shop.source === "openstreetmap") && <small className="muted">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a></small>}
             </div>
             <Field label="Business name"><input value={form.businessName ?? ""} onChange={set("businessName")} required /></Field>
