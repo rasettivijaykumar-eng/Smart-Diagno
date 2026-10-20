@@ -1,4 +1,4 @@
-import { Activity, CalendarCheck, ChevronDown, ClipboardList, HeartPulse, MapPin, Pill, ShieldCheck, Stethoscope } from "lucide-react";
+import { CalendarCheck, ChevronDown, ClipboardList, HeartPulse, MapPin, Pill, ShieldCheck, Stethoscope } from "lucide-react";
 import { useEffect } from "react";
 import { useAuth } from "./auth";
 import { Link } from "./router";
@@ -29,7 +29,7 @@ const faqs = [
 ];
 
 export function Brand() {
-  return <Link to="/" className="brand"><span className="brand-mark"><Activity size={19} strokeWidth={2.4} /></span><span>smart<span className="brand-light">diagno</span></span></Link>;
+  return <Link to="/" className="brand" aria-label="Smart Diagno home"><img className="brand-logo" src="/smart-diagno-logo.png" alt="Smart Diagno" /></Link>;
 }
 
 export function SiteHeader() {
@@ -58,6 +58,7 @@ export function SiteFooter() {
 export function Landing() {
   const { user } = useAuth();
   useEffect(() => {
+    if (!("IntersectionObserver" in window)) return;
     const els = Array.from(document.querySelectorAll<HTMLElement>(".feature, .steps li, .privacy-grid li, .section-head, .panel-card, .faq-list details"));
     els.forEach((el, i) => { el.classList.add("sr"); el.style.transitionDelay = `${(i % 4) * 90}ms`; });
     const io = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: 0.12 });

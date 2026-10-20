@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Activity, ArrowLeft, Building2, Eye, EyeOff, MapPin, ShieldCheck, Stethoscope, Pill, UserRound } from "lucide-react";
+import { ArrowLeft, Building2, Eye, EyeOff, MapPin, ShieldCheck, Stethoscope, Pill, UserRound } from "lucide-react";
 import { get, post } from "./api";
 import { useAuth, type User } from "./auth";
+import { Brand } from "./Landing";
 import { COUNTRIES, INDIA_STATES } from "./locationData";
 import { Link, navigate } from "./router";
 import { Alert, Field, Loading, SubmitButton, useAction } from "./ui";
@@ -350,7 +351,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   return (
     <div className="auth-page">
       <aside className="auth-aside">
-        <Link to="/" className="brand auth-brand"><span className="brand-mark"><Activity size={19} strokeWidth={2.4} /></span><span>smart<span className="brand-light">diagno</span></span></Link>
+        <Brand />
         <div>
           <h1>{mode === "login" ? "Welcome back." : "Create your account."}</h1>
           <p>One place for finding doctors, keeping your health history, following your prescriptions and coordinating with your pharmacy.</p>

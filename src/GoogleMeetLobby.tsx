@@ -178,6 +178,7 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
         <header className="meet-lobby-header">
           <div className="meet-lobby-header-left">
             <div className="meet-lobby-brand">
+              <img className="meet-lobby-logo" src="/smart-diagno-logo.png" alt="Smart Diagno" />
               <Video size={20} className="meet-video-icon" />
               <span>Google Meet Consultation</span>
             </div>
@@ -192,7 +193,7 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
             )}
           </div>
           <div className="meet-lobby-header-right">
-            <button className="icon-btn" onClick={() => reload()} title="Refresh status">
+            <button className="icon-btn" onClick={() => reload()} title="Refresh status" aria-label="Refresh consultation status">
               <RefreshCw size={16} />
             </button>
             <button className="ui-icon-btn" onClick={onClose} aria-label="Close">

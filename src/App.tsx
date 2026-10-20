@@ -121,7 +121,7 @@ function Dashboard() {
         </main>
       </div>
       <nav className="tabbar" aria-label="Dashboard (mobile)">
-        {items.slice(0, 5).map((i) => <Link key={i.path} to={`/app${i.path ? "/" + i.path : ""}`} className={i.path === section ? "active" : ""}>{i.icon}<span>{i.label}</span></Link>)}
+        {items.slice(0, 5).map((i) => <Link key={i.path} to={`/app${i.path ? "/" + i.path : ""}`} className={i.path === section ? "active" : ""} aria-current={i.path === section ? "page" : undefined}>{i.icon}<span>{i.label}</span></Link>)}
       </nav>
     </div>
   );
