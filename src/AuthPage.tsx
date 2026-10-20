@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Activity, ArrowLeft, Building2, Eye, EyeOff, ShieldCheck, Stethoscope, Pill, UserRound } from "lucide-react";
+import { Activity, ArrowLeft, Building2, Eye, EyeOff, LocateFixed, MapPin, ShieldCheck, Stethoscope, Pill, UserRound } from "lucide-react";
 import { get, post } from "./api";
 import { useAuth, type User } from "./auth";
 import { COUNTRIES, INDIA_STATES } from "./locationData";
 import { Link, navigate } from "./router";
+import { detectDeviceLocation } from "./location";
 import { Alert, Field, Loading, SubmitButton, useAction } from "./ui";
 
 type Role = "patient" | "doctor" | "pharmacy";
@@ -49,6 +50,10 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [loadingHosp, setLoadingHosp] = useState(false);
   const [hospFilter, setHospFilter] = useState("");
   const [customClinic, setCustomClinic] = useState(false);
+  const [nearbyPharmacies, setNearbyPharmacies] = useState<any[]>([]);
+  const [loadingPharmacies, setLoadingPharmacies] = useState(false);
+  const [pharmacyLocation, setPharmacyLocation] = useState("");
+  const [pharmacyLocationError, setPharmacyLocationError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
   // Cascading location state
@@ -84,11 +89,45 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     }
   };
 
+  const locatePharmacy = async () => {
+    setLoadingPharmacies(true);
+    setPharmacyLocationError("");
+    try {
+      let coordinates: { lat: number; lng: number };
+      try {
+        coordinates = await detectDeviceLocation();
+        setPharmacyLocation("Using your device location");
+      } catch {
+        const fallback = await get<{ lat: number; lng: number; label: string; source: string }>("/places/my-location");
+        coordinates = { lat: fallback.lat, lng: fallback.lng };
+        setPharmacyLocation(`Using approximate location: ${fallback.label}`);
+      }
+      setForm((previous) => ({ ...previous, lat: String(coordinates.lat), lng: String(coordinates.lng) }));
+      const result = await get<{ shops: any[] }>(`/places/pharmacies?${new URLSearchParams({ lat: String(coordinates.lat), lng: String(coordinates.lng), radiusKm: "20" })}`);
+      setNearbyPharmacies(result.shops);
+    } catch (error) {
+      setPharmacyLocationError(error instanceof Error ? error.message : "Could not determine location or find nearby pharmacies.");
+    } finally {
+      setLoadingPharmacies(false);
+    }
+  };
+
+  const selectPharmacy = (shop: any) => {
+    setForm((previous) => ({
+      ...previous, businessName: shop.name, address: shop.address || previous.address || "",
+      placeId: shop.id, lat: String(shop.lat), lng: String(shop.lng),
+    }));
+  };
+
   // Initial fetch for doctor registration
   useEffect(() => {
     if (mode === "register" && role === "doctor") {
       fetchHospitalsForLocation(selectedCountry, selectedState, selectedDistrict, customVillage || selectedVillage);
     }
+  }, [mode, role]);
+
+  useEffect(() => {
+    if (mode === "register" && role === "pharmacy") void locatePharmacy();
   }, [mode, role]);
 
   const handleCountryChange = (c: string) => {
@@ -167,6 +206,9 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           businessName: form.businessName,
           licenseNo: form.licenseNo?.trim() || undefined,
           address: form.address,
+          placeId: form.placeId || undefined,
+          lat: form.lat ? Number(form.lat) : undefined,
+          lng: form.lng ? Number(form.lng) : undefined,
         } : {}),
       };
     const result = await action.run(() => post<{ user: User }>(mode === "login" ? "/auth/login" : "/auth/register", payload));
@@ -424,6 +466,31 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           </>}
 
           {mode === "register" && role === "pharmacy" && <>
+            <div className="stack" style={{ gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <strong><MapPin size={15} /> Nearby medical shops</strong>
+                <button type="button" className="outline-button" onClick={() => void locatePharmacy()} disabled={loadingPharmacies}>
+                  <LocateFixed size={14} /> {loadingPharmacies ? "Finding…" : "Use my location"}
+                </button>
+              </div>
+              <small className="muted">{pharmacyLocation || "Allow location access to search within 20 km. You can enter your shop manually below."}</small>
+              {pharmacyLocationError && <Alert kind="warn">{pharmacyLocationError}</Alert>}
+              {loadingPharmacies ? <Loading label="Finding nearby pharmacies…" /> : nearbyPharmacies.length > 0 ? (
+                <div className="pharmacy-registration-list" role="radiogroup" aria-label="Nearby pharmacy listings">
+                  {nearbyPharmacies.map((shop) => (
+                    <button
+                      type="button"
+                      key={shop.id}
+                      className={`pharmacy-registration-option ${form.placeId === shop.id ? "selected" : ""}`}
+                      onClick={() => selectPharmacy(shop)}
+                    >
+                      <span><strong>{shop.name}</strong><small>{shop.address || "Address not listed"}</small></span>
+                      <small>{shop.distanceKm} km · {shop.orderable ? "Smart Diagno pharmacy" : "Map listing"}</small>
+                    </button>
+                  ))}
+                </div>
+              ) : !pharmacyLocationError ? <small className="muted">No pharmacies were found nearby. Enter your shop details below.</small> : null}
+            </div>
             <Field label="Business name"><input value={form.businessName ?? ""} onChange={set("businessName")} required /></Field>
             <Field label="Pharmacy licence number (optional)" hint="Optional for college project / demonstration"><input value={form.licenseNo ?? ""} onChange={set("licenseNo")} placeholder="e.g. PH-12345 (leave blank if not available)" /></Field>
             <Field label="Address"><input value={form.address ?? ""} onChange={set("address")} required /></Field>

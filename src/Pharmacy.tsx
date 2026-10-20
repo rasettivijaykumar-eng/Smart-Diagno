@@ -98,8 +98,10 @@ export function PharmacyOrders() {
       {action.error && <Alert kind="error">{action.error}</Alert>}
       {list.data!.orders.length === 0 ? <Empty title="No orders yet" text="Patients share prescriptions with you after giving consent." /> :
         <ul className="rx-list">{list.data!.orders.map((o) => (
-          <li key={o.id} className="rx-card"><header><div><strong>{o.patientName}</strong><small>{o.prescription?.id} · issued {o.prescription ? fmtDate(o.prescription.issuedAt) : ""} by {o.prescription?.doctorName}</small></div><Badge tone={statusTone(o.status)}>{humanize(o.status)}</Badge></header>
+          <li key={o.id} className="rx-card"><header><div><strong>{o.patientName}</strong><small>{o.prescription ? `${o.prescription.id} · issued ${fmtDate(o.prescription.issuedAt)} by ${o.prescription.doctorName}` : "Medicine request"}</small></div><Badge tone={statusTone(o.status)}>{humanize(o.status)}</Badge></header>
             {o.prescription && <ul className="bullets">{o.prescription.items.map((i: any, n: number) => <li key={n}><strong>{i.name}</strong> — {i.dose}, {i.route}, {i.frequency}, {i.durationDays} days{i.instructions ? `. ${i.instructions}` : ""}</li>)}</ul>}
+            {o.medicineRequests?.length > 0 && <><strong>Requested medicines</strong><ul className="bullets">{o.medicineRequests.map((name: string, n: number) => <li key={n}>{name}</li>)}</ul></>}
+            {o.attachments?.length > 0 && <div className="stack"><strong>Patient-shared reports and photos</strong>{o.attachments.map((file: any) => <a key={file.id} href={file.url}>{file.name}</a>)}</div>}
             {o.prescription?.status === "revoked" && <Alert kind="error">This prescription was revoked. Do not dispense.</Alert>}
             {o.deliveryAddress && <small>Delivery address: {o.deliveryAddress}</small>}
             {o.quote && <p>Quote total: <strong>{o.quote.total}</strong></p>}
@@ -115,7 +117,8 @@ export function PharmacyOrders() {
 
 function QuoteModal({ order, inventory, onClose, onDone }: { order: any; inventory: any[]; onClose: () => void; onDone: () => void }) {
   const [rows, setRows] = useState<Array<{ name: string; qty: string; unitPrice: string }>>(
-    order.prescription.items.map((i: any) => { const stock = inventory.find((s) => s.name.toLowerCase() === i.name.toLowerCase() && s.stock > 0); return { name: i.name, qty: "1", unitPrice: stock ? String(stock.price) : "" }; }));
+    (order.prescription?.items?.map((i: any) => i.name) ?? order.medicineRequests ?? [""])
+      .map((name: string) => { const stock = inventory.find((s) => s.name.toLowerCase() === name.toLowerCase() && s.stock > 0); return { name, qty: "1", unitPrice: stock ? String(stock.price) : "" }; }));
   const [fee, setFee] = useState("0");
   const [note, setNote] = useState("");
   const action = useAction();
@@ -128,7 +131,7 @@ function QuoteModal({ order, inventory, onClose, onDone }: { order: any; invento
   return (
     <Modal title="Quotation" onClose={onClose}>
       <form className="stack" onSubmit={submit}>
-        <Alert>Only quote items you can supply. Prices pre-fill from your inventory when the name matches; check them before sending.</Alert>
+        <Alert>Review the request and only quote items you can supply. Prices pre-fill from your inventory when the name matches; check them before sending.</Alert>
         {rows.map((r, n) => <div key={n} className="quote-row"><Field label="Item"><input value={r.name} onChange={(e) => upd(n, "name", e.target.value)} required /></Field><Field label="Qty"><input type="number" min={1} value={r.qty} onChange={(e) => upd(n, "qty", e.target.value)} required /></Field><Field label="Unit price"><input type="number" min={0} step="0.01" value={r.unitPrice} onChange={(e) => upd(n, "unitPrice", e.target.value)} required /></Field>{rows.length > 1 && <button type="button" className="icon-btn" aria-label="Remove item" onClick={() => setRows(rows.filter((_, i) => i !== n))}><Trash2 size={15} /></button>}</div>)}
         <Field label="Delivery fee"><input type="number" min={0} step="0.01" value={fee} onChange={(e) => setFee(e.target.value)} /></Field>
         <Field label="Note to patient"><input value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} /></Field>

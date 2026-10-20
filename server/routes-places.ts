@@ -10,6 +10,20 @@ export type Hospital = {
   source: "google" | "openstreetmap"; directionsUrl: string; mapsUrl: string; phone?: string; rating?: number;
 };
 
+type NearbyPharmacy = {
+  id: string;
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  distanceKm: number;
+  source: "google" | "openstreetmap" | "smart-diagno";
+  orderable: boolean;
+  directionsUrl: string;
+  mapsUrl: string;
+  phone?: string;
+};
+
 const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 const cache = new Map<string, { at: number; value: Hospital[] }>();
 const CACHE_MS = 10 * 60 * 1000;
@@ -18,6 +32,84 @@ const directions = (lat: number, lng: number, placeId?: string) =>
   `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}${placeId ? `&destination_place_id=${encodeURIComponent(placeId)}` : ""}`;
 const mapsLink = (name: string, lat: number, lng: number) =>
   `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${name} ${lat},${lng}`)}`;
+
+async function findMapPharmacies(lat: number, lng: number, radiusKm: number): Promise<NearbyPharmacy[]> {
+  const radiusM = radiusKm * 1000;
+  const key = process.env.GOOGLE_MAPS_API_KEY;
+  if (key) {
+    try {
+      const result = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+        method: "POST", signal: AbortSignal.timeout(8000),
+        headers: {
+          "content-type": "application/json", "X-Goog-Api-Key": key,
+          "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.nationalPhoneNumber,places.googleMapsUri",
+        },
+        body: JSON.stringify({
+          includedTypes: ["pharmacy"], maxResultCount: 20, rankPreference: "DISTANCE",
+          locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: radiusM } },
+        }),
+      });
+      if (result.ok) {
+        const body: any = await result.json();
+        const places: NearbyPharmacy[] = (body.places ?? []).flatMap((place: any) => {
+          const pLat = place.location?.latitude, pLng = place.location?.longitude;
+          if (typeof pLat !== "number" || typeof pLng !== "number") return [];
+          const exactDistance = distanceKm(lat, lng, pLat, pLng);
+          if (exactDistance > radiusKm) return [];
+          return [{
+            id: `g:${place.id}`, name: place.displayName?.text ?? "Pharmacy",
+            address: place.formattedAddress ?? "", lat: pLat, lng: pLng,
+            distanceKm: Math.round(exactDistance * 10) / 10,
+            source: "google", orderable: false, directionsUrl: directions(pLat, pLng, place.id),
+            mapsUrl: place.googleMapsUri ?? mapsLink(place.displayName?.text ?? "Pharmacy", pLat, pLng),
+            phone: place.nationalPhoneNumber,
+          }];
+        });
+        if (places.length >= 10) return places;
+        return [...places, ...await findOsmPharmacies(lat, lng, radiusM)];
+      }
+    } catch { /* Fall back to OpenStreetMap. */ }
+  }
+  return findOsmPharmacies(lat, lng, radiusM);
+}
+
+async function findOsmPharmacies(lat: number, lng: number, radiusM: number): Promise<NearbyPharmacy[]> {
+  const query = `[out:json][timeout:20];(node["amenity"="pharmacy"](around:${radiusM},${lat},${lng});way["amenity"="pharmacy"](around:${radiusM},${lat},${lng});relation["amenity"="pharmacy"](around:${radiusM},${lat},${lng});node["shop"="chemist"](around:${radiusM},${lat},${lng});way["shop"="chemist"](around:${radiusM},${lat},${lng});relation["shop"="chemist"](around:${radiusM},${lat},${lng}););out center tags 100;`;
+  for (const endpoint of OVERPASS) {
+    try {
+      const result = await fetch(endpoint, {
+        method: "POST", signal: AbortSignal.timeout(15000),
+        headers: { "content-type": "application/x-www-form-urlencoded", "user-agent": "SmartDiagno/1.0 (care navigation)" },
+        body: `data=${encodeURIComponent(query)}`,
+      });
+      if (!result.ok) continue;
+      const body: any = await result.json();
+      return (body.elements ?? []).flatMap((element: any): NearbyPharmacy[] => {
+        const pLat = element.lat ?? element.center?.lat;
+        const pLng = element.lon ?? element.center?.lon;
+        const tags = element.tags ?? {};
+        if (typeof pLat !== "number" || typeof pLng !== "number") return [];
+        const name = tags.name ?? tags["name:en"];
+        if (!name) return [];
+        const exactDistance = distanceKm(lat, lng, pLat, pLng);
+        if (exactDistance > radiusM / 1000) return [];
+        const distance = Math.round(exactDistance * 10) / 10;
+        const address = [
+          tags["addr:housenumber"], tags["addr:street"],
+          tags["addr:suburb"] ?? tags["addr:neighbourhood"],
+          tags["addr:city"] ?? tags["addr:town"], tags["addr:postcode"],
+        ].filter(Boolean).join(", ");
+        return [{
+          id: `osm:${element.type}/${element.id}`, name, address, lat: pLat, lng: pLng,
+          distanceKm: distance, source: "openstreetmap", orderable: false,
+          directionsUrl: directions(pLat, pLng), mapsUrl: mapsLink(name, pLat, pLng),
+          phone: tags.phone ?? tags["contact:phone"],
+        }];
+      });
+    } catch { /* Try the next Overpass mirror. */ }
+  }
+  return [];
+}
 
 async function fromGoogle(lat: number, lng: number, radiusM: number): Promise<Hospital[] | null> {
   const key = process.env.GOOGLE_MAPS_API_KEY;
@@ -533,6 +625,49 @@ placesRouter.get("/places/hospitals", async (request, response) => {
   }
 });
 
+placesRouter.get("/places/pharmacies", async (request, response) => {
+  const query = z.object({
+    lat: z.coerce.number().min(-90).max(90),
+    lng: z.coerce.number().min(-180).max(180),
+    radiusKm: z.coerce.number().min(1).max(50).default(20),
+  }).safeParse(request.query);
+  if (!query.success) return response.status(400).json({ error: "Valid latitude and longitude are required." });
+  if (!rateLimit(`pharmacies:${request.ip}`, 30, 60_000)) {
+    return response.status(429).json({ error: "Too many pharmacy searches. Please wait a minute." });
+  }
+
+  const { lat, lng, radiusKm } = query.data;
+  const registered: NearbyPharmacy[] = db.pharmacies
+    .filter((pharmacy) => pharmacy.verification === "verified" && typeof pharmacy.lat === "number" && typeof pharmacy.lng === "number")
+    .flatMap((pharmacy) => {
+      const exactDistance = distanceKm(lat, lng, pharmacy.lat, pharmacy.lng);
+      if (exactDistance > radiusKm) return [];
+      const distance = Math.round(exactDistance * 10) / 10;
+      return [{
+        id: pharmacy.id, name: pharmacy.name, address: pharmacy.address, lat: pharmacy.lat, lng: pharmacy.lng,
+        distanceKm: distance, source: "smart-diagno", orderable: true,
+        directionsUrl: directions(pharmacy.lat, pharmacy.lng),
+        mapsUrl: mapsLink(pharmacy.name, pharmacy.lat, pharmacy.lng),
+        phone: pharmacy.phone,
+      }];
+    });
+
+  const mapShops = await findMapPharmacies(lat, lng, radiusKm);
+  const registeredNames = new Set(registered.map((shop) => shop.name.toLowerCase().replace(/[^a-z0-9]/g, "")));
+  const uniqueMapShops = mapShops.filter((shop) => {
+    const key = shop.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (registeredNames.has(key)) return false;
+    registeredNames.add(key);
+    return true;
+  });
+
+  response.json({
+    shops: [...registered, ...uniqueMapShops].sort((a, b) => a.distanceKm - b.distanceKm),
+    center: { lat, lng },
+    radiusKm,
+  });
+});
+
 // Auto-detect client location via IP
 placesRouter.get("/places/my-location", async (request, response) => {
   try {
@@ -613,5 +748,3 @@ placesRouter.get("/places/reverse-geocode", async (request, response) => {
   } catch {}
   response.json({ label: "Device GPS Location" });
 });
-
-

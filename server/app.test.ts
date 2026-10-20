@@ -32,7 +32,7 @@ const PASSWORD = "Str0ng-password";
 const inTwoDays = () => new Date(Date.now() + 2 * 86_400_000).toISOString();
 
 describe("Smart Diagno platform", () => {
-  const patient = new Client(), other = new Client(), doctor = new Client(), pharmacy = new Client(), admin = new Client();
+  const patient = new Client(), other = new Client(), doctor = new Client(), pharmacy = new Client(), unverifiedPharmacy = new Client(), admin = new Client();
   let pharmacyProfileId = "", slotId = "", appointmentId = "", rxId = "", orderId = "";
 
   it("registers accounts, rejects weak passwords and wrong logins", async () => {
@@ -40,7 +40,8 @@ describe("Smart Diagno platform", () => {
     assert.equal((await patient.call("POST", "/api/auth/register", { name: "Pat One", email: "pat@test.local", password: PASSWORD, role: "patient" })).status, 201);
     assert.equal((await other.call("POST", "/api/auth/register", { name: "Pat Two", email: "pat2@test.local", password: PASSWORD, role: "patient" })).status, 201);
     assert.equal((await doctor.call("POST", "/api/auth/register", { name: "Dr Test", email: "doc@test.local", password: PASSWORD, role: "doctor", specialty: "General Physician", licenseNo: "L1", qualifications: "MBBS" })).status, 201);
-    assert.equal((await pharmacy.call("POST", "/api/auth/register", { name: "Pharma", email: "ph@test.local", password: PASSWORD, role: "pharmacy", businessName: "Test Pharmacy", licenseNo: "P1", address: "Somewhere" })).status, 201);
+    assert.equal((await pharmacy.call("POST", "/api/auth/register", { name: "Pharma", email: "ph@test.local", password: PASSWORD, role: "pharmacy", businessName: "Test Pharmacy", licenseNo: "P1", address: "Somewhere", placeId: "test-place", lat: 12.9716, lng: 77.5946 })).status, 201);
+    assert.equal((await unverifiedPharmacy.call("POST", "/api/auth/register", { name: "Unverified Pharma", email: "unverified-ph@test.local", password: PASSWORD, role: "pharmacy", businessName: "Unverified Pharmacy", address: "Somewhere else" })).status, 201);
     assert.equal((await new Client().call("POST", "/api/auth/login", { email: "pat@test.local", password: "wrong-password-1" })).status, 401);
     assert.equal((await admin.call("POST", "/api/auth/login", { email: "admin@test.local", password: "Admin-pass-12345" })).status, 200);
     // Registration can never create an elevated role.
@@ -77,6 +78,10 @@ describe("Smart Diagno platform", () => {
     assert.equal((await anon.call("GET", "/api/doctors?nearby=true&lat=12.98&lng=77.60")).body.doctors.length, 1);
     assert.equal((await anon.call("GET", "/api/doctors?nearby=true&lat=19.07&lng=72.87")).body.doctors.length, 0);
     assert.match((await anon.call("GET", "/api/doctors?lat=12.98&lng=77.60")).body.doctors[0].directionsUrl, /google\.com\/maps\/dir/);
+    const nearbyPharmacies = await anon.call("GET", "/api/pharmacies?lat=12.98&lng=77.60&radiusKm=20");
+    assert.equal(nearbyPharmacies.body.pharmacies.length, 1);
+    assert.equal(nearbyPharmacies.body.pharmacies[0].id, pharmacyProfileId);
+    assert.equal((await anon.call("GET", "/api/pharmacies?lat=19.07&lng=72.87&radiusKm=20")).body.pharmacies.length, 0);
   });
 
   it("prevents double booking of a slot", async () => {
@@ -170,6 +175,50 @@ describe("Smart Diagno platform", () => {
     for (const status of ["preparing", "dispatched", "out_for_delivery", "delivered"]) {
       assert.equal((await pharmacy.call("PATCH", `/api/orders/${orderId}/status`, { status })).status, 200);
     }
+  });
+
+  it("supports consented medicine requests and privately serves validated attachments", async () => {
+    const unverifiedId = (await unverifiedPharmacy.call("GET", "/api/pharmacy/profile")).body.profile.id;
+    const unverified = await patient.call("POST", "/api/orders", { pharmacyId: unverifiedId, medicineRequests: ["Pain relief tablets"], consent: true });
+    assert.equal(unverified.status, 403);
+
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]).toString("base64");
+    const invalid = await patient.call("POST", "/api/orders", {
+      pharmacyId: pharmacyProfileId, medicineRequests: ["Pain relief tablets"],
+      attachments: [{ name: "invalid.png", mime: "image/png", data: Buffer.from("not a png").toString("base64") }],
+      consent: true,
+    });
+    assert.equal(invalid.status, 400);
+
+    const created = await patient.call("POST", "/api/orders", {
+      pharmacyId: pharmacyProfileId, medicineRequests: ["Pain relief tablets", "Vitamin D"],
+      attachments: [{ name: "report.png", mime: "image/png", data: png }], consent: true,
+    });
+    assert.equal(created.status, 201);
+    const request = created.body.order;
+    assert.equal(request.prescription, null);
+    assert.deepEqual(request.medicineRequests, ["Pain relief tablets", "Vitamin D"]);
+    assert.equal(request.attachments.length, 1);
+    assert.equal(JSON.stringify(request).includes(png), false);
+    const filePath = request.attachments[0].url;
+    assert.equal((await other.call("GET", filePath)).status, 404);
+    assert.equal((await patient.call("GET", filePath)).status, 200);
+    assert.equal((await pharmacy.call("GET", filePath)).status, 200);
+
+    assert.equal((await pharmacy.call("PATCH", `/api/orders/${request.id}/status`, { status: "under_review" })).status, 200);
+    const quote = await pharmacy.call("POST", `/api/orders/${request.id}/quote`, { items: [{ name: "Pain relief tablets", qty: 1, unitPrice: 12 }], deliveryFee: 3 });
+    assert.equal(quote.status, 200);
+    assert.equal(quote.body.order.quote.total, 15);
+    assert.equal((await patient.call("PATCH", `/api/orders/${request.id}/patient`, { action: "confirm" })).status, 200);
+
+    const attachmentOnly = await patient.call("POST", "/api/orders", {
+      pharmacyId: pharmacyProfileId,
+      attachments: [{ name: "report.png", mime: "image/png", data: png }], consent: true,
+    });
+    assert.equal(attachmentOnly.status, 201);
+    assert.equal((await pharmacy.call("POST", `/api/orders/${attachmentOnly.body.order.id}/quote`, {
+      items: [{ name: "Recommended medicine", qty: 1, unitPrice: 8 }],
+    })).status, 200);
   });
 
   it("verifies prescriptions without leaking patient data and supports revocation", async () => {

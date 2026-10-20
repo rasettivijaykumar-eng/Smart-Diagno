@@ -61,7 +61,8 @@ publicRouter.post("/auth/register", (request, response) => {
   }
   if (data.role === "pharmacy") {
     insert("pharmacies", {
-      userId: user.id, name: data.businessName, licenseNo: data.licenseNo || "OPTIONAL", address: data.address, lat: data.lat, lng: data.lng,
+      userId: user.id, name: data.businessName, licenseNo: data.licenseNo || "OPTIONAL", address: data.address,
+      placeId: data.placeId, lat: data.lat, lng: data.lng,
       hours: "", delivery: false, verification: "pending",
     });
   }
@@ -210,6 +211,7 @@ publicRouter.get("/doctors/:id/slots", (request, response) => {
 publicRouter.get("/pharmacies", (request, response) => {
   const query = z.object({
     lat: z.coerce.number().min(-90).max(90).optional(), lng: z.coerce.number().min(-180).max(180).optional(),
+    radiusKm: z.coerce.number().min(1).max(50).optional(),
   }).safeParse(request.query);
   if (!query.success) return response.status(400).json({ error: "Invalid location." });
   const list = db.pharmacies
@@ -218,6 +220,11 @@ publicRouter.get("/pharmacies", (request, response) => {
       id: pharmacy.id, name: pharmacy.name, address: pharmacy.address, lat: pharmacy.lat, lng: pharmacy.lng,
       hours: pharmacy.hours, delivery: pharmacy.delivery,
     }, query.data.lat, query.data.lng))
+    .filter((pharmacy) => query.data.radiusKm === undefined || (
+      query.data.lat !== undefined && query.data.lng !== undefined
+      && typeof pharmacy.lat === "number" && typeof pharmacy.lng === "number"
+      && distanceKm(query.data.lat, query.data.lng, pharmacy.lat, pharmacy.lng) <= query.data.radiusKm
+    ))
     .sort((a, b) => (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9));
   response.json({ pharmacies: list });
 });

@@ -6,6 +6,7 @@ import { BookingModal, DoctorSearch } from "./DoctorSearch";
 import { ConsultationChatModal } from "./ConsultationChat";
 import { GoogleMeetLobbyModal } from "./GoogleMeetLobby";
 import { Link, navigate } from "./router";
+import { detectDeviceLocation } from "./location";
 import { Alert, Badge, Empty, Field, fmtDate, fmtDateTime, humanize, Loading, Modal, Panel, statusTone, SubmitButton, useAction, useLoad } from "./ui";
 
 type Appt = { id: string; doctorName: string; start: string; mode: string; status: string; reason: string; durationMin: number; videoNote?: string };
@@ -1191,11 +1192,30 @@ function Prescriptions({ rx }: { rx: ReturnType<typeof useLoad<{ prescriptions: 
 }
 
 function ShareModal({ rx, onClose, onDone }: { rx: Rx; onClose: () => void; onDone: () => void }) {
-  const pharmacies = useLoad(() => get<{ pharmacies: any[] }>("/pharmacies"), []);
+  const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationLabel, setLocationLabel] = useState("Finding nearby pharmacies…");
+  const pharmacies = useLoad(
+    () => get<{ pharmacies: any[] }>(`/pharmacies${location ? `?${new URLSearchParams({ lat: String(location.lat), lng: String(location.lng), radiusKm: "20" })}` : ""}`),
+    [location?.lat, location?.lng]
+  );
   const [pharmacyId, setPharmacyId] = useState("");
   const [address, setAddress] = useState("");
   const [consent, setConsent] = useState(false);
   const action = useAction();
+  useEffect(() => {
+    let active = true;
+    detectDeviceLocation().catch(() => get<{ lat: number; lng: number; label: string }>("/places/my-location"))
+      .then((result) => {
+        if (!active) return;
+        setLocation({ lat: result.lat, lng: result.lng });
+        setLocationLabel("Showing verified pharmacies within 20 km");
+      })
+      .catch(() => {
+        if (!active) return;
+        setLocationLabel("Location unavailable; showing all verified pharmacies");
+      });
+    return () => { active = false; };
+  }, []);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (await action.run(() => post(`/prescriptions/${rx.id}/share`, { pharmacyId, consent: true, ...(address ? { deliveryAddress: address } : {}) }))) onDone();
@@ -1203,11 +1223,12 @@ function ShareModal({ rx, onClose, onDone }: { rx: Rx; onClose: () => void; onDo
   return (
     <Modal title={`Share ${rx.id}`} onClose={onClose}>
       <form className="stack" onSubmit={submit}>
-        {pharmacies.loading ? <Loading /> : !pharmacies.data ? <Alert kind="error">{pharmacies.error ?? "Couldn't load pharmacies."}</Alert> : pharmacies.data.pharmacies.length === 0 ? <Alert>No verified pharmacies are available yet.</Alert> :
+        <small className="muted">{locationLabel}</small>
+        {pharmacies.loading ? <Loading /> : !pharmacies.data ? <Alert kind="error">{pharmacies.error ?? "Couldn't load pharmacies."}</Alert> : pharmacies.data.pharmacies.length === 0 ? <Alert>No verified pharmacies are available in this area yet.</Alert> :
           <fieldset className="slot-grid"><legend>Choose a verified pharmacy</legend>{pharmacies.data.pharmacies.map((p) => (
-            <label key={p.id} className={pharmacyId === p.id ? "selected" : ""}><input type="radio" name="ph" checked={pharmacyId === p.id} onChange={() => setPharmacyId(p.id)} /><span>{p.name}</span><small>{p.address} · {p.hours || "Hours not listed"} · {p.delivery ? "Delivers" : "Pickup only"}</small>
+            <label key={p.id} className={pharmacyId === p.id ? "selected" : ""}><input type="radio" name="ph" checked={pharmacyId === p.id} onChange={() => { setPharmacyId(p.id); setConsent(false); }} /><span>{p.name}</span><small>{p.address} · {p.distanceKm == null ? "Distance unavailable" : `${p.distanceKm} km`} · {p.hours || "Hours not listed"} · {p.delivery ? "Delivers" : "Pickup only"}</small>
               {p.lat != null && p.lng != null && <a href={`https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}><Navigation size={12} /> Directions</a>}</label>))}</fieldset>}
-        <Field label="Delivery address (optional)"><input value={address} onChange={(e) => setAddress(e.target.value)} maxLength={250} /></Field>
+        <Field label="Delivery address (optional)"><input value={address} onChange={(e) => { setAddress(e.target.value); setConsent(false); }} maxLength={250} /></Field>
         <label className="check-row consent"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} /><span>I agree to share this prescription (medicines and doctor details) and my first name with the selected pharmacy. They can't see the rest of my health record.</span></label>
         {action.error && <Alert kind="error">{action.error}</Alert>}
         <SubmitButton busy={action.busy} disabled={!consent || !pharmacyId}>Share prescription</SubmitButton>
@@ -1245,17 +1266,170 @@ function MedicineCheck() {
 /* ---------- Orders ---------- */
 export function Orders() {
   const list = useLoad(() => get<{ orders: any[] }>("/orders"), []);
+  const prescriptions = useLoad(() => get<{ prescriptions: Rx[] }>("/prescriptions"), []);
+  const [shops, setShops] = useState<any[]>([]);
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationLabel, setLocationLabel] = useState("Finding your location…");
+  const [locationError, setLocationError] = useState("");
+  const [nearbyLoading, setNearbyLoading] = useState(true);
+  const [pharmacyId, setPharmacyId] = useState("");
+  const [prescriptionId, setPrescriptionId] = useState("");
+  const [medicineText, setMedicineText] = useState("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [fileError, setFileError] = useState("");
+  const [consent, setConsent] = useState(false);
+  const [requestDone, setRequestDone] = useState(false);
   const action = useAction();
   const act = async (id: string, a: string) => { if (await action.run(() => patch(`/orders/${id}/patient`, { action: a }))) list.reload(); };
+
+  const loadNearby = async (lat: number, lng: number) => {
+    setNearbyLoading(true);
+    try {
+      const result = await get<{ shops: any[] }>(`/places/pharmacies?${new URLSearchParams({ lat: String(lat), lng: String(lng), radiusKm: "20" })}`);
+      setShops(result.shops);
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : "Nearby shops could not be loaded.");
+    } finally {
+      setNearbyLoading(false);
+    }
+  };
+
+  const locateNearby = async () => {
+    setNearbyLoading(true);
+    setLocationError("");
+    setPharmacyId("");
+    setConsent(false);
+    try {
+      try {
+        const device = await detectDeviceLocation();
+        setCoords(device);
+        setLocationLabel("Using your device location");
+        await loadNearby(device.lat, device.lng);
+      } catch {
+        const fallback = await get<{ lat: number; lng: number; label: string; source: string }>("/places/my-location");
+        setCoords({ lat: fallback.lat, lng: fallback.lng });
+        setLocationLabel(`Approximate location: ${fallback.label}`);
+        await loadNearby(fallback.lat, fallback.lng);
+      }
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : "Could not find shops near you.");
+      setNearbyLoading(false);
+    }
+  };
+
+  useEffect(() => { void locateNearby(); }, []);
+
+  const chooseFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(event.target.files ?? []);
+    const allowed = ["application/pdf", "image/png", "image/jpeg"];
+    const valid = selected.filter((file) => allowed.includes(file.type) && file.size <= 2 * 1024 * 1024);
+    if (selected.length > 3 || valid.length !== selected.length || [...files, ...valid].length > 3) {
+      setFileError("Choose up to 3 PDF, PNG or JPEG files, each no larger than 2 MB.");
+    } else {
+      setFiles((previous) => [...previous, ...valid]);
+      setFileError("");
+      setConsent(false);
+    }
+    event.target.value = "";
+  };
+
+  const submitRequest = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const medicineRequests = medicineText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    if (!pharmacyId) return;
+    if (!prescriptionId && medicineRequests.length === 0 && files.length === 0) {
+      setFileError("Add a prescription, medicine list, or report/photo attachment.");
+      return;
+    }
+    const result = await action.run(async () => {
+      const attachments = await Promise.all(files.map(async (file) => {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read attachment."));
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.readAsDataURL(file);
+        });
+        return { name: file.name, mime: file.type, data: dataUrl.split(",")[1] ?? "" };
+      }));
+      return post("/orders", {
+        pharmacyId,
+        ...(prescriptionId ? { prescriptionId } : {}),
+        ...(medicineRequests.length ? { medicineRequests } : {}),
+        ...(attachments.length ? { attachments } : {}),
+        ...(deliveryAddress.trim() ? { deliveryAddress: deliveryAddress.trim() } : {}),
+        consent: true,
+      });
+    });
+    if (result) {
+      setRequestDone(true);
+      setPharmacyId("");
+      setPrescriptionId("");
+      setMedicineText("");
+      setDeliveryAddress("");
+      setFiles([]);
+      setConsent(false);
+      list.reload();
+    }
+  };
+
   if (list.loading) return <Loading />;
   if (list.error) return <Alert kind="error">{list.error}</Alert>;
   return (
     <Panel title="Pharmacy orders">
       <Alert>Payment is not processed online and live delivery tracking isn't available. Status updates come from the pharmacy.</Alert>
       {action.error && <Alert kind="error">{action.error}</Alert>}
-      {list.data!.orders.length === 0 ? <Empty title="No orders" text="Share an active prescription with a verified pharmacy from the Medicines page." action={<Link to="/app/medicines" className="outline-button">Go to Medicines</Link>} /> :
+      {requestDone && <Alert kind="success">Your pharmacy request was sent. The pharmacy will review it and prepare a quotation.</Alert>}
+      <form className="stack pharmacy-request-form" onSubmit={submitRequest}>
+        <div className="pharmacy-request-heading">
+          <div><h2>Request medicines from a nearby pharmacy</h2><small>{locationLabel} · within 20 km</small></div>
+          <button type="button" className="outline-button" onClick={() => void locateNearby()} disabled={nearbyLoading}><LocateFixed size={15} /> Refresh location</button>
+        </div>
+        {locationError && <Alert kind="warn">{locationError}</Alert>}
+        <section className="nearby-pharmacy-section">
+          <strong>Choose a pharmacy</strong>
+          {nearbyLoading ? <Loading label="Finding nearby medical shops…" /> : shops.length === 0 ? (
+            <Empty title="No nearby pharmacies found" text="Try refreshing your location. Map-listed shops can be viewed, but only verified Smart Diagno pharmacies can receive requests." />
+          ) : (
+            <div className="nearby-pharmacy-list">
+              {shops.map((shop) => (
+                <article key={shop.id} className={`nearby-pharmacy-card ${pharmacyId === shop.id ? "selected" : ""}`}>
+                  <label>
+                    <input type="radio" name="order-pharmacy" checked={pharmacyId === shop.id} disabled={!shop.orderable} onChange={() => { setPharmacyId(shop.id); setRequestDone(false); setConsent(false); }} />
+                    <span><strong>{shop.name}</strong><small>{shop.address || "Address not listed"}</small><small>{shop.distanceKm} km · {shop.orderable ? "Verified — accepts requests" : "Map listing — not on Smart Diagno"}</small></span>
+                  </label>
+                  <a className="outline-button button-small" href={shop.directionsUrl} target="_blank" rel="noreferrer">Directions</a>
+                </article>
+              ))}
+            </div>
+          )}
+          {coords && <small className="muted">Location coordinates: {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}</small>}
+        </section>
+        <Field label="Doctor prescription (optional)">
+          <select value={prescriptionId} onChange={(event) => { setPrescriptionId(event.target.value); setRequestDone(false); setConsent(false); }}>
+            <option value="">No prescription</option>
+            {(prescriptions.data?.prescriptions ?? []).filter((rx) => rx.status === "active").map((rx) => (
+              <option key={rx.id} value={rx.id}>{rx.id} · Dr. {rx.doctorName} · {rx.items.map((item) => item.name).join(", ")}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Medicine names (optional, one per line)">
+          <textarea value={medicineText} onChange={(event) => { setMedicineText(event.target.value); setRequestDone(false); setConsent(false); }} rows={4} maxLength={2400} placeholder={"Enter medicine names and quantities if known, for example:\nMedicine name — 10 tablets"} />
+        </Field>
+        <Field label="Attach reports or photos (optional)" hint="PDF, PNG or JPEG. Up to 3 files, 2 MB each. Shared only with the selected pharmacy.">
+          <input type="file" accept="application/pdf,image/png,image/jpeg" multiple onChange={chooseFiles} />
+        </Field>
+        {files.length > 0 && <ul className="pharmacy-upload-list">{files.map((file, index) => <li key={`${file.name}-${index}`}>{file.name} <button type="button" className="text-link" onClick={() => { setFiles((previous) => previous.filter((_, i) => i !== index)); setConsent(false); }}>Remove</button></li>)}</ul>}
+        {fileError && <Alert kind="error">{fileError}</Alert>}
+        <Field label="Delivery address (optional)"><input value={deliveryAddress} onChange={(event) => { setDeliveryAddress(event.target.value); setConsent(false); }} maxLength={250} /></Field>
+        <label className="check-row consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>I agree to share my name and the selected prescription, medicine list, attachments, and delivery address with this pharmacy. This does not share my other health records.</span></label>
+        <SubmitButton busy={action.busy} disabled={!consent || !pharmacyId || nearbyLoading}>Send request to pharmacy</SubmitButton>
+      </form>
+      {list.data!.orders.length === 0 ? <Empty title="No orders" text="Your pharmacy requests and quotations will appear here." action={<Link to="/app/medicines" className="outline-button">Go to Medicines</Link>} /> :
         <ul className="rx-list">{list.data!.orders.map((o) => (
-          <li key={o.id} className="rx-card"><header><div><strong>{o.pharmacyName}</strong><small>Prescription {o.prescription?.id}</small></div><Badge tone={statusTone(o.status)}>{humanize(o.status)}</Badge></header>
+          <li key={o.id} className="rx-card"><header><div><strong>{o.pharmacyName}</strong><small>{o.prescription ? `Prescription ${o.prescription.id}` : "Medicine request"}</small></div><Badge tone={statusTone(o.status)}>{humanize(o.status)}</Badge></header>
+            {o.medicineRequests?.length > 0 && <><strong>Requested medicines</strong><ul className="bullets">{o.medicineRequests.map((name: string, i: number) => <li key={i}>{name}</li>)}</ul></>}
+            {o.attachments?.length > 0 && <div className="stack"><strong>Shared attachments</strong>{o.attachments.map((file: any) => <a key={file.id} href={file.url}>{file.name}</a>)}</div>}
             {o.quote && <div className="quote"><table><thead><tr><th>Item</th><th>Qty</th><th>Unit</th></tr></thead><tbody>{o.quote.items.map((i: any, n: number) => <tr key={n}><td>{i.name}</td><td>{i.qty}</td><td>{i.unitPrice}</td></tr>)}</tbody></table><p>Delivery: {o.quote.deliveryFee} · <strong>Total: {o.quote.total}</strong></p>{o.quote.note && <small>{o.quote.note}</small>}</div>}
             <ol className="status-trail">{o.history.map((h: any, n: number) => <li key={n}>{humanize(h.status)} <small>{fmtDateTime(h.at)}{h.note ? ` — ${h.note}` : ""}</small></li>)}</ol>
             <div className="row-actions">
