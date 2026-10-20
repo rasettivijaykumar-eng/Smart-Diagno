@@ -40,8 +40,10 @@ describe("Smart Diagno platform", () => {
     assert.equal((await patient.call("POST", "/api/auth/register", { name: "Pat One", email: "pat@test.local", password: PASSWORD, role: "patient" })).status, 201);
     assert.equal((await other.call("POST", "/api/auth/register", { name: "Pat Two", email: "pat2@test.local", password: PASSWORD, role: "patient" })).status, 201);
     assert.equal((await doctor.call("POST", "/api/auth/register", { name: "Dr Test", email: "doc@test.local", password: PASSWORD, role: "doctor", specialty: "General Physician", licenseNo: "L1", qualifications: "MBBS" })).status, 201);
-    assert.equal((await pharmacy.call("POST", "/api/auth/register", { name: "Pharma", email: "ph@test.local", password: PASSWORD, role: "pharmacy", businessName: "Test Pharmacy", licenseNo: "P1", address: "Somewhere", postalCode: "517581", placeId: "test-place", lat: 12.9716, lng: 77.5946 })).status, 201);
-    assert.equal((await unverifiedPharmacy.call("POST", "/api/auth/register", { name: "Unverified Pharma", email: "unverified-ph@test.local", password: PASSWORD, role: "pharmacy", businessName: "Unverified Pharmacy", address: "Somewhere else" })).status, 201);
+    assert.equal((await pharmacy.call("POST", "/api/auth/register", { name: "Pharma", email: "ph@test.local", password: PASSWORD, role: "pharmacy", country: "India", businessName: "Test Pharmacy", licenseNo: "P1", address: "Somewhere", postalCode: "517581", placeId: "test-place", lat: 12.9716, lng: 77.5946 })).status, 201);
+    assert.equal((await unverifiedPharmacy.call("POST", "/api/auth/register", { name: "Unverified Pharma", email: "unverified-ph@test.local", password: PASSWORD, role: "pharmacy", country: "India", businessName: "Unverified Pharmacy", address: "Somewhere else" })).status, 400);
+    assert.equal((await unverifiedPharmacy.call("POST", "/api/auth/register", { name: "Unverified Pharma", email: "unverified-ph@test.local", password: PASSWORD, role: "pharmacy", country: "India", businessName: "Unverified Pharmacy", address: "Somewhere else", postalCode: "51758" })).status, 400);
+    assert.equal((await unverifiedPharmacy.call("POST", "/api/auth/register", { name: "Unverified Pharma", email: "unverified-ph@test.local", password: PASSWORD, role: "pharmacy", country: "India", businessName: "Unverified Pharmacy", address: "Somewhere else", postalCode: "517581" })).status, 201);
     assert.equal((await new Client().call("POST", "/api/auth/login", { email: "pat@test.local", password: "wrong-password-1" })).status, 401);
     assert.equal((await admin.call("POST", "/api/auth/login", { email: "admin@test.local", password: "Admin-pass-12345" })).status, 200);
     // Registration can never create an elevated role.
@@ -150,6 +152,7 @@ describe("Smart Diagno platform", () => {
           lat: "13.4251452",
           lon: "79.5875358",
           display_name: "Narayanavanam, Tirupati, Andhra Pradesh, 517581, India",
+          address: { postcode: "517581" },
           boundingbox: ["13.40", "13.45", "79.55", "79.62"],
         }]), { status: 200, headers: { "content-type": "application/json" } });
       }
@@ -174,6 +177,21 @@ describe("Smart Diagno platform", () => {
           ],
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (url.startsWith("https://places.googleapis.com/v1/places:searchText")) {
+        const body = JSON.parse(String(init?.body));
+        assert.match(body.textQuery, /517581/);
+        assert.match(body.textQuery, /Narayanavanam/);
+        assert.equal(body.strictTypeFiltering, true);
+        const extra = body.textQuery.startsWith("medical store")
+          ? [{ id: "text-medicals", primaryType: "pharmacy", displayName: { text: "Pin Medical Store" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517581", addressComponents: [{ longText: "517581", types: ["postal_code"] }], location: { latitude: 13.421, longitude: 79.581 } }]
+          : [];
+        return new Response(JSON.stringify({
+          places: [
+            { id: "local-google", primaryType: "pharmacy", displayName: { text: "Google Local Pharmacy" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517581, India", addressComponents: [{ longText: "517581", types: ["postal_code"] }], location: { latitude: 13.42, longitude: 79.58 } },
+            ...extra,
+          ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (url.startsWith("https://overpass-api.de/") || url.startsWith("https://overpass.kumi.systems/")) {
         return new Response(JSON.stringify({ elements: [
           { type: "node", id: 1, lat: 13.42, lon: 79.58, tags: { name: "Local Medicals", amenity: "pharmacy", "addr:postcode": "517581" } },
@@ -186,14 +204,17 @@ describe("Smart Diagno platform", () => {
     };
     try {
       const client = new Client();
+      assert.equal((await client.call("GET", "/api/places/pharmacies/search?country=India&state=Andhra%20Pradesh&district=Tirupati&village=Narayanavanam")).status, 400);
+      assert.equal((await client.call("GET", "/api/places/pharmacies/search?country=India&state=Andhra%20Pradesh&district=Tirupati&village=Narayanavanam&postalCode=51758")).status, 400);
       const result = await client.call("GET", "/api/places/pharmacies/search?country=India&state=Andhra%20Pradesh&district=Tirupati&village=Narayanavanam&postalCode=517581");
       assert.equal(result.status, 200);
       assert.equal(result.body.center.lat, 13.4251452);
       assert.equal(result.body.mapListingsAvailable, true);
-      assert.deepEqual(result.body.providers, { googlePlaces: "available", openStreetMap: "available" });
+      assert.deepEqual(result.body.providers, { googlePlaces: "available", googleNearby: "available", googleTextSearch: "available", openStreetMap: "available" });
       assert.deepEqual(result.body.shops.map((shop: any) => shop.name), [
         "Google Local Pharmacy",
-        "Pharmacy Without Listed Pincode",
+        "Dr. Raju Pharmacy and Clinic",
+        "Pin Medical Store",
         "Local Medicals",
       ]);
     } finally {

@@ -73,6 +73,9 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [customVillage, setCustomVillage] = useState("");
 
   const set = (key: string) => (event: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: event.target.value });
+  const isPharmacyPostalCodeValid = (country: string, postalCode: string) =>
+    country === "India" ? /^\d{6}$/.test(postalCode.trim()) : /^[A-Za-z0-9 -]{3,12}$/.test(postalCode.trim());
+
   const clearSelectedPharmacy = () => {
     setForm((previous) => ({
       ...previous,
@@ -126,6 +129,12 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       setLoadingPharmacies(false);
       return;
     }
+    if (!isPharmacyPostalCodeValid(country, postalCode)) {
+      setPharmacyLocationError(country === "India" ? "Enter a valid six-digit pincode before searching." : "Enter a valid postal code before searching.");
+      setNearbyPharmacies([]);
+      setLoadingPharmacies(false);
+      return;
+    }
 
     setLoadingPharmacies(true);
     setPharmacyLocationError("");
@@ -147,7 +156,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         state,
         district,
         village,
-        ...(postalCode.trim() ? { postalCode: postalCode.trim() } : {}),
+        postalCode: postalCode.trim(),
       })}`);
       if (searchId !== pharmacySearchId.current) return;
       setForm((previous) => ({ ...previous, lat: String(result.center.lat), lng: String(result.center.lng) }));
@@ -224,7 +233,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   };
 
   useEffect(() => {
-    if (mode !== "register" || role !== "pharmacy" || !pharmacyCountry || !pharmacyState || !pharmacyDistrict || pharmacyVillage.trim().length < 2) return;
+    if (mode !== "register" || role !== "pharmacy" || !pharmacyCountry || !pharmacyState || !pharmacyDistrict || pharmacyVillage.trim().length < 2 || !isPharmacyPostalCodeValid(pharmacyCountry, pharmacyPostalCode)) return;
     if (customPharmacyVillage === "__custom__") return;
     const timer = window.setTimeout(() => {
       void searchPharmaciesByAddress(pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage, pharmacyPostalCode);
@@ -304,6 +313,10 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (mode === "register" && role === "pharmacy" && !isPharmacyPostalCodeValid(pharmacyCountry, pharmacyPostalCode)) {
+      setPharmacyLocationError(pharmacyCountry === "India" ? "Enter a valid six-digit pincode before registering." : "Enter a valid postal code before registering.");
+      return;
+    }
     const payload = mode === "login"
       ? { email: form.email ?? "", password: form.password ?? "" }
       : {
@@ -319,6 +332,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           lng: form.lng ? Number(form.lng) : undefined,
         } : {}),
         ...(role === "pharmacy" ? {
+          country: pharmacyCountry,
           businessName: form.businessName,
           licenseNo: form.licenseNo?.trim() || undefined,
           address: form.address,
@@ -686,7 +700,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   )}
                 </div>
               </div>
-              <Field label="Pincode / postal code" hint="Optional, but helps narrow shops to the correct locality">
+              <Field label="Pincode / postal code" hint={pharmacyCountry === "India" ? "Required: enter the six-digit pincode for this village." : "Required: enter the postal code for this locality."}>
                 <input
                   value={pharmacyPostalCode}
                   onChange={(event) => {
@@ -698,9 +712,12 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                     setPharmacyLocationError("");
                     clearSelectedPharmacy();
                   }}
-                  placeholder="Enter pincode or postal code"
+                  placeholder={pharmacyCountry === "India" ? "Enter 6-digit pincode" : "Enter postal code"}
                   autoComplete="postal-code"
+                  inputMode={pharmacyCountry === "India" ? "numeric" : "text"}
+                  pattern={pharmacyCountry === "India" ? "\\d{6}" : "[A-Za-z0-9 -]{3,12}"}
                   maxLength={12}
+                  required
                 />
               </Field>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -712,7 +729,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   type="button"
                   className="button button-small"
                   onClick={() => void searchPharmaciesByAddress(pharmacyCountry, pharmacyState, pharmacyDistrict, pharmacyVillage, pharmacyPostalCode)}
-                  disabled={loadingPharmacies || !pharmacyVillage}
+                  disabled={loadingPharmacies || !pharmacyVillage || !isPharmacyPostalCodeValid(pharmacyCountry, pharmacyPostalCode)}
                 >
                   Search medical shops in this area
                 </button>
@@ -727,7 +744,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
               {googlePlacesUnavailable && !pharmacyMapsUnavailable && <Alert kind="warn">Google Maps Places is not configured on this server, so only shops listed in OpenStreetMap can appear. For a more complete shop list, configure GOOGLE_MAPS_API_KEY with Places API enabled in the Render environment.</Alert>}
               {loadingPharmacies ? <Loading label="Finding pharmacies in this village…" /> : nearbyPharmacies.length > 0 ? (
                 <>
-                  <small className="muted">{nearbyPharmacies.length} pharmacy listings found. Only listings categorized as pharmacies are shown; map listings may not include every local shop.</small>
+                  <small className="muted">{nearbyPharmacies.length} pharmacy listings found for pincode {pharmacyPostalCode}. Results must match this pincode and the selected village; Google Maps data may not include every local shop.</small>
                   <div className="pharmacy-registration-list" role="radiogroup" aria-label="Pharmacies in the selected village">
                     {nearbyPharmacies.map((shop) => (
                       <button

@@ -17,6 +17,7 @@ const registerSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(120),
   password,
   role: z.enum(["patient", "doctor", "pharmacy"]),
+  country: z.string().trim().min(2).max(80).optional(),
   specialty: z.string().trim().max(80).optional(),
   licenseNo: z.string().trim().max(60).optional(),
   qualifications: z.string().trim().max(200).optional(),
@@ -32,6 +33,15 @@ const registerSchema = z.object({
   }
   if (value.role === "pharmacy") for (const key of ["businessName", "address"] as const) {
     if (!value[key]) ctx.addIssue({ code: "custom", path: [key], message: "Required for pharmacies" });
+  }
+  if (value.role === "pharmacy" && !value.postalCode) {
+    ctx.addIssue({ code: "custom", path: ["postalCode"], message: "Pincode / postal code is required for pharmacies" });
+  }
+  if (value.role === "pharmacy" && value.country === "India" && value.postalCode && !/^\d{6}$/.test(value.postalCode)) {
+    ctx.addIssue({ code: "custom", path: ["postalCode"], message: "Enter a valid six-digit Indian pincode" });
+  }
+  if (value.role === "pharmacy" && value.postalCode && !/^[A-Za-z0-9 -]{3,12}$/.test(value.postalCode)) {
+    ctx.addIssue({ code: "custom", path: ["postalCode"], message: "Enter a valid pincode / postal code" });
   }
 });
 

@@ -38,6 +38,8 @@ type PlaceBounds = {
 
 type PharmacyProviderStatus = {
   googlePlaces: string;
+  googleNearby: string;
+  googleTextSearch: string;
   openStreetMap: string;
 };
 
@@ -272,6 +274,9 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
   if (!place || !Array.isArray(place.boundingbox) || place.boundingbox.length !== 4) {
     throw new Error("We couldn't find this village. Check the spelling, district and postal code.");
   }
+  if (place.address?.postcode && !matchesPostalCode(String(place.address.postcode), postalCode)) {
+    throw new Error(`The selected pincode ${postalCode} does not match the pincode for this village. Check the village and pincode.`);
+  }
   const bounds: PlaceBounds = {
     south: Number(place.boundingbox[0]),
     north: Number(place.boundingbox[1]),
@@ -291,7 +296,39 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
   const googleKey = process.env.GOOGLE_MAPS_API_KEY;
   const providers: PharmacyProviderStatus = {
     googlePlaces: googleKey ? "not checked" : "not configured",
+    googleNearby: googleKey ? "not checked" : "not configured",
+    googleTextSearch: googleKey ? "not checked" : "not configured",
     openStreetMap: "not checked",
+  };
+  const addGooglePlaces = (items: any[]) => {
+    for (const item of items) {
+      const lat = item.location?.latitude, lng = item.location?.longitude;
+      const address = String(item.formattedAddress ?? "");
+      const name = String(item.displayName?.text ?? "Pharmacy");
+      if (item.primaryType !== "pharmacy" && !item.types?.includes("pharmacy")) continue;
+      if (isNonPharmacyPlaceName(name)) continue;
+      if (typeof lat !== "number" || typeof lng !== "number" || !isWithinBounds(lat, lng, bounds)) continue;
+      const listedPostalCodes = (item.addressComponents ?? [])
+        .filter((component: any) => component.types?.includes("postal_code"))
+        .map((component: any) => component.longText ?? component.shortText)
+        .filter((code: unknown): code is string => typeof code === "string");
+      if (postalCode && (listedPostalCodes.length
+        ? !listedPostalCodes.some((code) => matchesPostalCode(code, postalCode))
+        : !matchesPostalCode(address, postalCode))) continue;
+      shops.push({
+        id: `g:${item.id}`,
+        name,
+        address,
+        lat,
+        lng,
+        distanceKm: 0,
+        source: "google",
+        orderable: false,
+        directionsUrl: directions(lat, lng, item.id),
+        mapsUrl: item.googleMapsUri ?? mapsLink(name, lat, lng),
+        phone: item.nationalPhoneNumber,
+      });
+    }
   };
   if (googleKey) {
     try {
@@ -322,35 +359,53 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
       if (googleResponse.ok) {
         const body: any = await googleResponse.json();
         providers.googlePlaces = "available";
+        providers.googleNearby = "available";
         available = true;
-        for (const item of body.places ?? []) {
-          const lat = item.location?.latitude, lng = item.location?.longitude;
-          const address = String(item.formattedAddress ?? "");
-          if (item.primaryType !== "pharmacy") continue;
-          const name = String(item.displayName?.text ?? "Pharmacy");
-          if (isNonPharmacyPlaceName(name)) continue;
-          if (typeof lat !== "number" || typeof lng !== "number" || !isWithinBounds(lat, lng, bounds)) continue;
-          const listedPostalCodes = (item.addressComponents ?? [])
-            .filter((component: any) => component.types?.includes("postal_code"))
-            .map((component: any) => component.longText ?? component.shortText)
-            .filter((code: unknown): code is string => typeof code === "string");
-          if (postalCode && listedPostalCodes.length && !listedPostalCodes.some((code: string) => matchesPostalCode(code, postalCode))) continue;
-          shops.push({
-            id: `g:${item.id}`,
-            name,
-            address,
-            lat,
-            lng,
-            distanceKm: 0,
-            source: "google",
-            orderable: false,
-            directionsUrl: directions(lat, lng, item.id),
-            mapsUrl: item.googleMapsUri ?? mapsLink(name, lat, lng),
-            phone: item.nationalPhoneNumber,
-          });
+        addGooglePlaces(body.places ?? []);
+      } else providers.googleNearby = `HTTP ${googleResponse.status}`;
+    } catch { providers.googleNearby = "request failed"; }
+
+    const textSearchQueries = [
+      `pharmacy in ${postalCode}, ${areaQuery}`,
+      `medical store in ${postalCode}, ${areaQuery}`,
+      `chemist in ${postalCode}, ${areaQuery}`,
+    ];
+    for (const textQuery of textSearchQueries) {
+      try {
+        const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
+          method: "POST",
+          signal: AbortSignal.timeout(8000),
+          headers: {
+            "content-type": "application/json",
+            "X-Goog-Api-Key": googleKey,
+            "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.primaryType,places.types,places.nationalPhoneNumber,places.googleMapsUri",
+          },
+          body: JSON.stringify({
+            textQuery,
+            includedType: "pharmacy",
+            strictTypeFiltering: true,
+            maxResultCount: 20,
+            locationBias: {
+              rectangle: {
+                low: { latitude: bounds.south, longitude: bounds.west },
+                high: { latitude: bounds.north, longitude: bounds.east },
+              },
+            },
+          }),
+        });
+        if (!response.ok) {
+          if (providers.googleTextSearch !== "available") providers.googleTextSearch = `HTTP ${response.status}`;
+          continue;
         }
-      } else providers.googlePlaces = `HTTP ${googleResponse.status}`;
-    } catch { providers.googlePlaces = "request failed"; }
+        const body: any = await response.json();
+        providers.googleTextSearch = "available";
+        providers.googlePlaces = "available";
+        available = true;
+        addGooglePlaces(body.places ?? []);
+      } catch {
+        if (providers.googleTextSearch !== "available") providers.googleTextSearch = "request failed";
+      }
+    }
   }
 
   const overpassQuery = `[out:json][timeout:15];(nwr["amenity"="pharmacy"](${bounds.south},${bounds.west},${bounds.north},${bounds.east});nwr["shop"="chemist"](${bounds.south},${bounds.west},${bounds.north},${bounds.east}););out center tags 200;`;
@@ -383,7 +438,7 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
           tags["addr:postcode"],
         ].filter(Boolean);
         const address = addressParts.join(", ");
-        if (postalCode && tags["addr:postcode"] && !matchesPostalCode(tags["addr:postcode"], postalCode)) continue;
+        if (postalCode && !matchesPostalCode(String(tags["addr:postcode"] ?? address), postalCode)) continue;
         const name = tags.name ?? tags["name:en"] ?? "Pharmacy";
         shops.push({
           id: `osm:${item.type}/${item.id}`,
@@ -984,9 +1039,13 @@ placesRouter.get("/places/pharmacies/search", async (request, response) => {
     state: z.string().trim().max(80).optional(),
     district: z.string().trim().max(80).optional(),
     village: z.string().trim().min(2).max(100),
-    postalCode: z.string().trim().min(3).max(12).regex(/^[A-Za-z0-9 -]+$/).optional(),
+    postalCode: z.string().trim().min(3).max(12).regex(/^[A-Za-z0-9 -]+$/),
+  }).superRefine((value, ctx) => {
+    if (value.country === "India" && !/^\d{6}$/.test(value.postalCode)) {
+      ctx.addIssue({ code: "custom", path: ["postalCode"], message: "Enter a valid six-digit Indian pincode." });
+    }
   }).safeParse(request.query);
-  if (!query.success) return response.status(400).json({ error: "Select a valid country, village and optional postal code." });
+  if (!query.success) return response.status(400).json({ error: "Select a valid country, village and postal code." });
   if (!rateLimit(`pharmacy-area:${request.ip}`, 30, 60_000)) {
     return response.status(429).json({ error: "Too many pharmacy searches. Please wait a minute." });
   }
@@ -1010,7 +1069,7 @@ placesRouter.get("/places/pharmacies/search", async (request, response) => {
   }
 
   try {
-    const result = await findPharmaciesInArea(area, postalCode ?? "");
+    const result = await findPharmaciesInArea(area, postalCode);
     const value = { shops: result.shops, available: result.available, label: result.label, center: result.center, providers: result.providers };
     if (result.available) areaPharmacyCache.set(cacheKey, { at: Date.now(), value });
     response.json({
