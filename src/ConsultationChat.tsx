@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertCircle, Check, CheckCircle2, Copy, Download, Image as ImageIcon, QrCode, RefreshCw, Send, ShieldCheck, Upload, X, ZoomIn } from "lucide-react";
 import { get, post } from "./api";
 import { useAuth } from "./auth";
@@ -24,7 +25,7 @@ export function ConsultationChatModal({ appointmentId, onClose }: ConsultationCh
   const [showProofModal, setShowProofModal] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
   const [copiedUtr, setCopiedUtr] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesBodyRef = useRef<HTMLDivElement>(null);
   const action = useAction();
 
   // Load chat & appointment details
@@ -46,10 +47,11 @@ export function ConsultationChatModal({ appointmentId, onClose }: ConsultationCh
     return () => clearInterval(interval);
   }, [appointmentId, setData]);
 
-  // Scroll to bottom when messages change
+  // Keep new messages in view without scrolling the underlying dashboard.
   const messageCount = data?.chat?.messages?.length ?? 0;
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const body = messagesBodyRef.current;
+    body?.scrollTo({ top: body.scrollHeight, behavior: "smooth" });
   }, [messageCount]);
 
   const isDoctor = user?.role === "doctor";
@@ -87,7 +89,7 @@ export function ConsultationChatModal({ appointmentId, onClose }: ConsultationCh
     setTimeout(() => setCopiedUtr(false), 2000);
   };
 
-  return (
+  return createPortal(
     <div className="ui-modal-backdrop consultation-chat-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="ui-modal consultation-chat-window" role="dialog" aria-modal="true" aria-label="Consultation Chat">
         {/* Header */}
@@ -163,7 +165,7 @@ export function ConsultationChatModal({ appointmentId, onClose }: ConsultationCh
         )}
 
         {/* Main Chat Messages Stream */}
-        <div className="consultation-chat-body">
+        <div className="consultation-chat-body" ref={messagesBodyRef}>
           {loading && !chat ? (
             <Loading label="Loading consultation session..." />
           ) : error ? (
@@ -281,7 +283,6 @@ export function ConsultationChatModal({ appointmentId, onClose }: ConsultationCh
                   </div>
                 );
               })}
-              <div ref={messagesEndRef} />
             </div>
           )}
         </div>
@@ -354,7 +355,8 @@ export function ConsultationChatModal({ appointmentId, onClose }: ConsultationCh
           </Modal>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

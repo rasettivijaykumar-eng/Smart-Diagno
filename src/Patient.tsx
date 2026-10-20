@@ -97,7 +97,7 @@ export function Assistant() {
   const [areaSearching, setAreaSearching] = useState(false);
   const [bookingDoctor, setBookingDoctor] = useState<{ id: string; name: string } | null>(null);
   const [hospitalNotice, setHospitalNotice] = useState<{ hospital: any; reason: "auth" | "no-doctor" } | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-detect real location via IP then refine with GPS if permitted
   useEffect(() => {
@@ -170,9 +170,11 @@ export function Assistant() {
     }
   }, [coords]);
 
-  // Auto-scroll on new messages
+  // Keep message scrolling inside the chat panel rather than moving the whole page.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!sending) return;
+    const messages = messagesScrollRef.current;
+    messages?.scrollTo({ top: messages.scrollHeight, behavior: "smooth" });
   }, [activeChat?.messages, sending]);
 
   // Create new chat
@@ -438,7 +440,7 @@ export function Assistant() {
           )}
 
           {/* Messages Scroll Area */}
-          <div className="chat-messages-scroll">
+          <div className="chat-messages-scroll" ref={messagesScrollRef}>
             {loadingChat ? (
               <Loading label="Loading conversation…" />
             ) : !activeChat || activeChat.messages.length === 0 ? (
@@ -717,7 +719,6 @@ export function Assistant() {
                 <Loading label="Analyzing symptoms & finding hospitals…" />
               </div>
             )}
-            <div ref={messagesEndRef} />
           </div>
 
           {/* Chat Input Bar */}

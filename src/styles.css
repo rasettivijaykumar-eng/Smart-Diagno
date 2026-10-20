@@ -325,7 +325,7 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
   display: grid;
   grid-template-columns: 300px 1fr;
   gap: 20px;
-  min-height: 640px;
+  min-height: 0;
   align-items: stretch;
 }
 .chat-history-pane {
@@ -337,7 +337,9 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
   flex-direction: column;
   gap: 14px;
   box-shadow: 0 4px 18px rgba(10, 110, 209, 0.05);
-  height: 780px;
+  height: min(780px, calc(100vh - 250px));
+  height: min(780px, calc(100dvh - 250px));
+  min-height: 380px;
 }
 .chat-history-header {
   display: flex;
@@ -429,7 +431,9 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
   border-radius: 18px;
   display: flex;
   flex-direction: column;
-  height: 780px;
+  height: min(780px, calc(100vh - 250px));
+  height: min(780px, calc(100dvh - 250px));
+  min-height: 380px;
   box-shadow: 0 4px 18px rgba(10, 110, 209, 0.05);
   overflow: hidden;
 }
@@ -457,6 +461,7 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
   flex-direction: column;
   gap: 18px;
   overflow-y: auto;
+  min-height: 0;
 }
 .chat-bubble-user {
   align-self: flex-end;
@@ -1196,8 +1201,8 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
   .auth-main { padding: 16px; } .auth-card { padding: 20px; }
 }
 /* Consultation Chat */
-.consultation-chat-backdrop { z-index: 100; padding: 12px; }
-.consultation-chat-window { width: 100%; max-width: 780px; height: 90vh; max-height: 840px; display: flex; flex-direction: column; padding: 0; overflow: hidden; border-radius: 16px; border: 1px solid var(--line); background: #ffffff; box-shadow: 0 24px 60px #143c362b; }
+.consultation-chat-backdrop { position: fixed; inset: 0; z-index: 100; padding: 12px; }
+.consultation-chat-window { width: 100%; max-width: 780px; height: min(90vh, 840px); height: min(90dvh, 840px); max-height: none; min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; border-radius: 16px; border: 1px solid var(--line); background: #ffffff; box-shadow: 0 24px 60px #143c362b; }
 .consultation-chat-header { padding: 14px 20px; background: #ffffff; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .consultation-chat-header-info { display: flex; flex-direction: column; gap: 2px; }
 .consultation-participant-tag { display: flex; align-items: center; gap: 8px; font-size: 16px; color: var(--deep); }
@@ -1219,7 +1224,7 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
 .banner-top { display: flex; align-items: center; gap: 8px; }
 .banner-note { margin: 0; color: #4b5f59; font-size: 12.5px; }
 
-.consultation-chat-body { flex: 1; overflow-y: auto; padding: 20px; background: #f8faf8; display: flex; flex-direction: column; }
+.consultation-chat-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; background: #f8faf8; display: flex; flex-direction: column; }
 .consultation-messages-list { display: flex; flex-direction: column; gap: 14px; min-height: 100%; justify-content: flex-end; }
 .consultation-msg-system { text-align: center; margin: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .system-pill { display: inline-block; background: #e6eee8; color: #3b5a52; font-size: 12px; padding: 4px 14px; border-radius: 999px; }
@@ -1285,7 +1290,7 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
 .lightbox-actions { display: flex; justify-content: flex-end; width: 100%; }
 
 @media (max-width: 600px) {
-  .consultation-chat-window { height: 96vh; border-radius: 10px; }
+  .consultation-chat-window { height: 96vh; height: 96dvh; border-radius: 10px; }
   .consultation-msg-bubble { max-width: 90%; }
   .consultation-fee-card, .consultation-proof-card { max-width: 100%; }
   .consultation-payment-banner { flex-direction: column; align-items: flex-start; }
@@ -1386,4 +1391,3 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
   .meet-join-card { flex-direction: column; text-align: center; }
   .gc-connected-info { flex-direction: column; align-items: flex-start; }
 }
-
