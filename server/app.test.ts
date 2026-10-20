@@ -156,7 +156,20 @@ describe("Smart Diagno platform", () => {
       if (url.startsWith("https://places.googleapis.com/v1/places:searchText")) {
         const body = JSON.parse(String(init?.body));
         assert.match(body.textQuery, /517581/);
-        return new Response(JSON.stringify({ places: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ error: { message: "Places API (New) is not enabled." } }), { status: 403 });
+      }
+      if (url.startsWith("https://maps.googleapis.com/maps/api/place/textsearch/json?")) {
+        const params = new URL(url).searchParams;
+        assert.equal(params.get("key"), "test-key");
+        assert.match(params.get("query") ?? "", /517581/);
+        return new Response(JSON.stringify({
+          status: "OK",
+          results: [
+            { place_id: "local-google", name: "Google Local Pharmacy", formatted_address: "Narayanavanam, Andhra Pradesh 517581, India", geometry: { location: { lat: 13.42, lng: 79.58 } } },
+            { place_id: "wrong-postal", name: "Wrong Postal Pharmacy", formatted_address: "Narayanavanam, Andhra Pradesh 517502, India", geometry: { location: { lat: 13.42, lng: 79.58 } } },
+            { place_id: "outside", name: "Outside Village Pharmacy", formatted_address: "Andhra Pradesh 517581, India", geometry: { location: { lat: 13.50, lng: 79.58 } } },
+          ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.startsWith("https://overpass-api.de/") || url.startsWith("https://overpass.kumi.systems/")) {
         return new Response(JSON.stringify({ elements: [
@@ -173,7 +186,8 @@ describe("Smart Diagno platform", () => {
       const result = await client.call("GET", "/api/places/pharmacies/search?country=India&state=Andhra%20Pradesh&district=Tirupati&village=Narayanavanam&postalCode=517581");
       assert.equal(result.status, 200);
       assert.equal(result.body.center.lat, 13.4251452);
-      assert.deepEqual(result.body.shops.map((shop: any) => shop.name), ["Local Medicals"]);
+      assert.equal(result.body.mapListingsAvailable, true);
+      assert.deepEqual(result.body.shops.map((shop: any) => shop.name), ["Google Local Pharmacy", "Local Medicals"]);
     } finally {
       globalThis.fetch = originalFetch;
       if (originalMapsKey === undefined) delete process.env.GOOGLE_MAPS_API_KEY;

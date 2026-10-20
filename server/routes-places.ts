@@ -326,7 +326,51 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
           });
         }
       }
-    } catch { /* Continue with map-data fallback. */ }
+    } catch { /* Continue with the legacy Places endpoint and map-data fallback. */ }
+
+    if (!shops.some((shop) => shop.source === "google")) {
+      try {
+        const radius = Math.min(50_000, Math.ceil(Math.max(
+          distanceKm(center.lat, center.lng, bounds.south, bounds.west),
+          distanceKm(center.lat, center.lng, bounds.north, bounds.east),
+        ) * 1000));
+        const params = new URLSearchParams({
+          query: `pharmacy in ${pharmacyQuery}`,
+          location: `${center.lat},${center.lng}`,
+          radius: String(Math.max(radius, 100)),
+          type: "pharmacy",
+          key: googleKey,
+        });
+        const response = await fetch(`https://maps.googleapis.com/maps/api/place/textsearch/json?${params}`, {
+          signal: AbortSignal.timeout(8000),
+          headers: { accept: "application/json" },
+        });
+        if (response.ok) {
+          const body: any = await response.json();
+          if (body.status === "OK" || body.status === "ZERO_RESULTS") available = true;
+          for (const item of body.results ?? []) {
+            const lat = item.geometry?.location?.lat, lng = item.geometry?.location?.lng;
+            const address = String(item.formatted_address ?? "");
+            if (typeof lat !== "number" || typeof lng !== "number" || !isWithinBounds(lat, lng, bounds)) continue;
+            if (postalCode && !matchesPostalCode(address, postalCode)) continue;
+            const name = String(item.name ?? "Pharmacy");
+            shops.push({
+              id: `g:${item.place_id}`,
+              name,
+              address,
+              lat,
+              lng,
+              distanceKm: 0,
+              source: "google",
+              orderable: false,
+              directionsUrl: directions(lat, lng, item.place_id),
+              mapsUrl: mapsLink(name, lat, lng),
+              phone: item.formatted_phone_number,
+            });
+          }
+        }
+      } catch { /* Continue with OpenStreetMap data. */ }
+    }
   }
 
   const overpassQuery = `[out:json][timeout:15];(nwr["amenity"="pharmacy"](${bounds.south},${bounds.west},${bounds.north},${bounds.east});nwr["shop"="chemist"](${bounds.south},${bounds.west},${bounds.north},${bounds.east}););out center tags 200;`;

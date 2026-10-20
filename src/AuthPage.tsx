@@ -709,8 +709,12 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                 </button>
               )}
               {pharmacyLocationError && <Alert kind="warn">{pharmacyLocationError}</Alert>}
-              {pharmacyMapsUnavailable && <Alert kind="warn">Map listings are temporarily unavailable. Try again shortly or enter your shop details below.</Alert>}
-              {googlePlacesUnavailable && <Alert kind="warn">Google Maps Places is not configured on this server, so only shops listed in OpenStreetMap can appear. For a more complete shop list, configure GOOGLE_MAPS_API_KEY with Places API enabled in the Render environment.</Alert>}
+              {pharmacyMapsUnavailable && <Alert kind="warn">
+                Map listings are temporarily unavailable. {googlePlacesUnavailable
+                  ? "Google Places is not configured, and OpenStreetMap is currently unavailable. Try again later or enter your shop details below."
+                  : "Google Places is configured but did not return listings. Check that Places API is enabled, billing is active, and the API key restrictions allow server requests in Render."}
+              </Alert>}
+              {googlePlacesUnavailable && !pharmacyMapsUnavailable && <Alert kind="warn">Google Maps Places is not configured on this server, so only shops listed in OpenStreetMap can appear. For a more complete shop list, configure GOOGLE_MAPS_API_KEY with Places API enabled in the Render environment.</Alert>}
               {loadingPharmacies ? <Loading label="Finding pharmacies in this village…" /> : nearbyPharmacies.length > 0 ? (
                 <div className="pharmacy-registration-list" role="radiogroup" aria-label="Pharmacies in the selected village">
                   {nearbyPharmacies.map((shop) => (
