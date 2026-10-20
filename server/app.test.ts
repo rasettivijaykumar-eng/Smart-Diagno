@@ -109,13 +109,16 @@ describe("Smart Diagno platform", () => {
     };
     try {
       const client = new Client();
-      const path = "/api/places/pharmacies?lat=17.3843&lng=78.4583&radiusKm=20";
+      const path = "/api/places/pharmacies?lat=17.3843&lng=78.4583&radiusKm=29";
       const response = await client.call("GET", path);
       assert.equal(response.status, 200);
       assert.equal(response.body.mapListingsAvailable, true);
       assert.equal(response.body.shops.length, 1);
       assert.equal(response.body.shops[0].name, "Nearby Pharmacy");
       assert.equal(response.body.shops[0].source, "openstreetmap");
+      const defaultRadius = await client.call("GET", "/api/places/pharmacies?lat=17.3843&lng=78.4583");
+      assert.equal(defaultRadius.body.radiusKm, 29);
+      assert.equal(defaultRadius.body.shops.length, 1);
       const callsAfterInitialSearch = providerCalls;
       assert.equal((await client.call("GET", path)).body.shops.length, 1);
       assert.equal(providerCalls, callsAfterInitialSearch);

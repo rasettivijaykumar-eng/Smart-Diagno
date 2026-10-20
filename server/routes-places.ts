@@ -33,6 +33,7 @@ const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.k
 const cache = new Map<string, { at: number; value: Hospital[] }>();
 const pharmacyCache = new Map<string, { at: number; value: PharmacyMapResults }>();
 const CACHE_MS = 10 * 60 * 1000;
+const DEFAULT_PHARMACY_RADIUS_KM = 29;
 
 const directions = (lat: number, lng: number, placeId?: string) =>
   `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}${placeId ? `&destination_place_id=${encodeURIComponent(placeId)}` : ""}`;
@@ -740,7 +741,7 @@ placesRouter.get("/places/pharmacies", async (request, response) => {
   const query = z.object({
     lat: z.coerce.number().min(-90).max(90),
     lng: z.coerce.number().min(-180).max(180),
-    radiusKm: z.coerce.number().min(1).max(50).default(20),
+    radiusKm: z.coerce.number().min(1).max(50).default(DEFAULT_PHARMACY_RADIUS_KM),
   }).safeParse(request.query);
   if (!query.success) return response.status(400).json({ error: "Valid latitude and longitude are required." });
   if (!rateLimit(`pharmacies:${request.ip}`, 30, 60_000)) {

@@ -4,7 +4,7 @@ import { get, post } from "./api";
 import { useAuth, type User } from "./auth";
 import { COUNTRIES, INDIA_STATES } from "./locationData";
 import { Link, navigate } from "./router";
-import { detectDeviceLocation } from "./location";
+import { detectDeviceLocation, PHARMACY_SEARCH_RADIUS_KM } from "./location";
 import { Alert, Field, Loading, SubmitButton, useAction } from "./ui";
 
 type Role = "patient" | "doctor" | "pharmacy";
@@ -105,7 +105,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         setPharmacyLocation(`Using approximate location: ${fallback.label}`);
       }
       setForm((previous) => ({ ...previous, lat: String(coordinates.lat), lng: String(coordinates.lng) }));
-      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean }>(`/places/pharmacies?${new URLSearchParams({ lat: String(coordinates.lat), lng: String(coordinates.lng), radiusKm: "20" })}`);
+      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean }>(`/places/pharmacies?${new URLSearchParams({ lat: String(coordinates.lat), lng: String(coordinates.lng), radiusKm: String(PHARMACY_SEARCH_RADIUS_KM) })}`);
       setNearbyPharmacies(result.shops);
       setPharmacyMapsUnavailable(result.mapListingsAvailable === false);
     } catch (error) {
@@ -476,7 +476,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   <LocateFixed size={14} /> {loadingPharmacies ? "Finding…" : "Use my location"}
                 </button>
               </div>
-              <small className="muted">{pharmacyLocation || "Allow location access to search within 20 km. You can enter your shop manually below."}</small>
+              <small className="muted">{pharmacyLocation || `Allow location access to search within ${PHARMACY_SEARCH_RADIUS_KM} km. You can enter your shop manually below.`}</small>
               {pharmacyLocationError && <Alert kind="warn">{pharmacyLocationError}</Alert>}
               {pharmacyMapsUnavailable && <Alert kind="warn">Map listings are temporarily unavailable. Try again shortly or enter your shop details below.</Alert>}
               {loadingPharmacies ? <Loading label="Finding nearby pharmacies…" /> : nearbyPharmacies.length > 0 ? (

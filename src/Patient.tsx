@@ -6,7 +6,7 @@ import { BookingModal, DoctorSearch } from "./DoctorSearch";
 import { ConsultationChatModal } from "./ConsultationChat";
 import { GoogleMeetLobbyModal } from "./GoogleMeetLobby";
 import { Link, navigate } from "./router";
-import { detectDeviceLocation } from "./location";
+import { detectDeviceLocation, PHARMACY_SEARCH_RADIUS_KM } from "./location";
 import { Alert, Badge, Empty, Field, fmtDate, fmtDateTime, humanize, Loading, Modal, Panel, statusTone, SubmitButton, useAction, useLoad } from "./ui";
 
 type Appt = { id: string; doctorName: string; start: string; mode: string; status: string; reason: string; durationMin: number; videoNote?: string };
@@ -1195,7 +1195,7 @@ function ShareModal({ rx, onClose, onDone }: { rx: Rx; onClose: () => void; onDo
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationLabel, setLocationLabel] = useState("Finding nearby pharmacies…");
   const pharmacies = useLoad(
-    () => get<{ pharmacies: any[] }>(`/pharmacies${location ? `?${new URLSearchParams({ lat: String(location.lat), lng: String(location.lng), radiusKm: "20" })}` : ""}`),
+    () => get<{ pharmacies: any[] }>(`/pharmacies${location ? `?${new URLSearchParams({ lat: String(location.lat), lng: String(location.lng), radiusKm: String(PHARMACY_SEARCH_RADIUS_KM) })}` : ""}`),
     [location?.lat, location?.lng]
   );
   const [pharmacyId, setPharmacyId] = useState("");
@@ -1208,7 +1208,7 @@ function ShareModal({ rx, onClose, onDone }: { rx: Rx; onClose: () => void; onDo
       .then((result) => {
         if (!active) return;
         setLocation({ lat: result.lat, lng: result.lng });
-        setLocationLabel("Showing verified pharmacies within 20 km");
+        setLocationLabel(`Showing verified pharmacies within ${PHARMACY_SEARCH_RADIUS_KM} km`);
       })
       .catch(() => {
         if (!active) return;
@@ -1287,7 +1287,7 @@ export function Orders() {
   const loadNearby = async (lat: number, lng: number) => {
     setNearbyLoading(true);
     try {
-      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean }>(`/places/pharmacies?${new URLSearchParams({ lat: String(lat), lng: String(lng), radiusKm: "20" })}`);
+      const result = await get<{ shops: any[]; mapListingsAvailable?: boolean }>(`/places/pharmacies?${new URLSearchParams({ lat: String(lat), lng: String(lng), radiusKm: String(PHARMACY_SEARCH_RADIUS_KM) })}`);
       setShops(result.shops);
       setMapListingsUnavailable(result.mapListingsAvailable === false);
     } catch (error) {
@@ -1385,7 +1385,7 @@ export function Orders() {
       {requestDone && <Alert kind="success">Your pharmacy request was sent. The pharmacy will review it and prepare a quotation.</Alert>}
       <form className="stack pharmacy-request-form" onSubmit={submitRequest}>
         <div className="pharmacy-request-heading">
-          <div><h2>Request medicines from a nearby pharmacy</h2><small>{locationLabel} · within 20 km</small></div>
+          <div><h2>Request medicines from a nearby pharmacy</h2><small>{locationLabel} · within {PHARMACY_SEARCH_RADIUS_KM} km</small></div>
           <button type="button" className="outline-button" onClick={() => void locateNearby()} disabled={nearbyLoading}><LocateFixed size={15} /> Refresh location</button>
         </div>
         {locationError && <Alert kind="warn">{locationError}</Alert>}

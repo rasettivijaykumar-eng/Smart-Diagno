@@ -3,6 +3,8 @@ export interface Coordinates {
   lng: number;
 }
 
+export const PHARMACY_SEARCH_RADIUS_KM = 29;
+
 export function detectDeviceLocation(): Promise<Coordinates> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
