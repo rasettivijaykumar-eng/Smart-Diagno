@@ -183,6 +183,7 @@ describe("Smart Diagno platform", () => {
       assert.equal(result.status, 200);
       assert.equal(result.body.center.lat, 13.4251452);
       assert.equal(result.body.mapListingsAvailable, true);
+      assert.deepEqual(result.body.providers, { googlePlaces: "available", openStreetMap: "available" });
       assert.deepEqual(result.body.shops.map((shop: any) => shop.name), ["Google Local Pharmacy", "Local Medicals"]);
     } finally {
       globalThis.fetch = originalFetch;

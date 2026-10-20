@@ -55,6 +55,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [loadingPharmacies, setLoadingPharmacies] = useState(false);
   const [pharmacyLocation, setPharmacyLocation] = useState("");
   const [pharmacyLocationError, setPharmacyLocationError] = useState("");
+  const [pharmacyProviderStatus, setPharmacyProviderStatus] = useState("");
   const [pharmacyCountry, setPharmacyCountry] = useState("");
   const [pharmacyState, setPharmacyState] = useState("");
   const [pharmacyDistrict, setPharmacyDistrict] = useState("");
@@ -72,14 +73,19 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [customVillage, setCustomVillage] = useState("");
 
   const set = (key: string) => (event: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: event.target.value });
-  const clearSelectedPharmacy = () => setForm((previous) => ({
-    ...previous,
-    businessName: previous.placeId ? "" : previous.businessName,
-    address: previous.placeId ? "" : previous.address,
-    placeId: "",
-    lat: "",
-    lng: "",
-  }));
+  const clearSelectedPharmacy = () => {
+    setForm((previous) => ({
+      ...previous,
+      businessName: previous.placeId ? "" : previous.businessName,
+      address: previous.placeId ? "" : previous.address,
+      placeId: "",
+      lat: "",
+      lng: "",
+    }));
+    setPharmacyMapsUnavailable(false);
+    setGooglePlacesUnavailable(false);
+    setPharmacyProviderStatus("");
+  };
 
   useEffect(() => { if (user) navigate("/app", true); }, [user]);
 
@@ -125,6 +131,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     setPharmacyLocationError("");
     setPharmacyMapsUnavailable(false);
     setGooglePlacesUnavailable(false);
+    setPharmacyProviderStatus("");
     setNearbyPharmacies([]);
     setPharmacyLocation(`Searching for pharmacies in ${area}`);
     try {
@@ -134,6 +141,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         center: { lat: number; lng: number };
         mapListingsAvailable?: boolean;
         googlePlacesConfigured?: boolean;
+        providers?: Record<string, string>;
       }>(`/places/pharmacies/search?${new URLSearchParams({
         country,
         state,
@@ -146,6 +154,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       setNearbyPharmacies(result.shops);
       setPharmacyMapsUnavailable(result.mapListingsAvailable === false);
       setGooglePlacesUnavailable(result.googlePlacesConfigured === false);
+      setPharmacyProviderStatus(Object.entries(result.providers ?? {}).map(([name, status]) => `${name}: ${status}`).join(" · "));
       setPharmacyLocation(`Showing shops in ${result.area}`);
     } catch (error) {
       if (searchId !== pharmacySearchId.current) return;
@@ -713,6 +722,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                 Map listings are temporarily unavailable. {googlePlacesUnavailable
                   ? "Google Places is not configured, and OpenStreetMap is currently unavailable. Try again later or enter your shop details below."
                   : "Google Places is configured but did not return listings. Check that Places API is enabled, billing is active, and the API key restrictions allow server requests in Render."}
+                {pharmacyProviderStatus && <small style={{ display: "block", marginTop: 4 }}>Provider status: {pharmacyProviderStatus}</small>}
               </Alert>}
               {googlePlacesUnavailable && !pharmacyMapsUnavailable && <Alert kind="warn">Google Maps Places is not configured on this server, so only shops listed in OpenStreetMap can appear. For a more complete shop list, configure GOOGLE_MAPS_API_KEY with Places API enabled in the Render environment.</Alert>}
               {loadingPharmacies ? <Loading label="Finding pharmacies in this village…" /> : nearbyPharmacies.length > 0 ? (
