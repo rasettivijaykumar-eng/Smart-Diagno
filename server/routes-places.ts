@@ -247,7 +247,8 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
   label: string;
   center: { lat: number; lng: number };
 }> {
-  const areaQuery = [query, postalCode].filter(Boolean).join(", ");
+  const areaQuery = query;
+  const pharmacyQuery = [query, postalCode].filter(Boolean).join(", ");
   const geocodeParams = new URLSearchParams({
     format: "jsonv2", addressdetails: "1", limit: "1", q: areaQuery,
   });
@@ -289,7 +290,7 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
           "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.nationalPhoneNumber,places.googleMapsUri",
         },
         body: JSON.stringify({
-          textQuery: `pharmacy in ${areaQuery}`,
+          textQuery: `pharmacy in ${pharmacyQuery}`,
           includedType: "pharmacy",
           strictTypeFiltering: true,
           maxResultCount: 20,

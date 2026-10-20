@@ -137,18 +137,26 @@ describe("Smart Diagno platform", () => {
 
   it("limits pharmacy registration results to the selected village and postal code", async () => {
     const originalFetch = globalThis.fetch;
+    const originalMapsKey = process.env.GOOGLE_MAPS_API_KEY;
+    process.env.GOOGLE_MAPS_API_KEY = "test-key";
     globalThis.fetch = async (input, init) => {
       const url = String(input);
       if (url.startsWith(baseUrl)) return originalFetch(input, init);
       if (url.startsWith("https://nominatim.openstreetmap.org/search?")) {
         const params = new URL(url).searchParams;
-        assert.match(params.get("q") ?? "", /Narayanavanam.*517581/);
+        assert.match(params.get("q") ?? "", /Narayanavanam.*India/);
+        assert.doesNotMatch(params.get("q") ?? "", /517581/);
         return new Response(JSON.stringify([{
           lat: "13.4251452",
           lon: "79.5875358",
           display_name: "Narayanavanam, Tirupati, Andhra Pradesh, 517581, India",
           boundingbox: ["13.40", "13.45", "79.55", "79.62"],
         }]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.startsWith("https://places.googleapis.com/v1/places:searchText")) {
+        const body = JSON.parse(String(init?.body));
+        assert.match(body.textQuery, /517581/);
+        return new Response(JSON.stringify({ places: [] }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.startsWith("https://overpass-api.de/") || url.startsWith("https://overpass.kumi.systems/")) {
         return new Response(JSON.stringify({ elements: [
@@ -168,6 +176,8 @@ describe("Smart Diagno platform", () => {
       assert.deepEqual(result.body.shops.map((shop: any) => shop.name), ["Local Medicals"]);
     } finally {
       globalThis.fetch = originalFetch;
+      if (originalMapsKey === undefined) delete process.env.GOOGLE_MAPS_API_KEY;
+      else process.env.GOOGLE_MAPS_API_KEY = originalMapsKey;
     }
   });
 
