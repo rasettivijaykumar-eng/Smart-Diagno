@@ -158,6 +158,7 @@ describe("Smart Diagno platform", () => {
         assert.deepEqual(body.includedTypes, ["pharmacy"]);
         assert.ok(body.locationRestriction.circle.radius >= 100);
         assert.ok(body.locationRestriction.circle.radius < 50_000);
+        assert.deepEqual(body.locationRestriction.circle.center, { latitude: 13.4251452, longitude: 79.5875358 });
         return new Response(JSON.stringify({
           places: [
             { id: "local-google", displayName: { text: "Google Local Pharmacy" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517581, India", location: { latitude: 13.42, longitude: 79.58 } },

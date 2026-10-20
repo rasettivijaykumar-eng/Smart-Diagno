@@ -298,7 +298,7 @@ async function findPharmaciesInArea(query: string, postalCode: string): Promise<
           maxResultCount: 20,
           locationRestriction: {
             circle: {
-              center,
+              center: { latitude: center.lat, longitude: center.lng },
               radius: Math.min(50_000, searchRadius),
             },
           },
