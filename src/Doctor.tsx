@@ -10,8 +10,19 @@ import { Link, navigate } from "./router";
 export function DoctorOverview() {
   const { profile } = useAuth();
   const [chatApptId, setChatApptId] = useState<string | null>(null);
+  const [meetApptId, setMeetApptId] = useState<string | null>(null);
   const appts = useLoad(() => get<{ appointments: any[] }>("/appointments"), []);
+  const meetAction = useAction();
   const upcoming = (appts.data?.appointments ?? []).filter((a) => a.status === "confirmed");
+  const startMeet = async (appointment: any) => {
+    if (!appointment.googleMeetUrl) {
+      setMeetApptId(appointment.id);
+      return;
+    }
+    window.open(appointment.googleMeetUrl, "_blank", "noopener,noreferrer");
+    const res = await meetAction.run(() => post(`/appointments/${appointment.id}/request-join`));
+    if (res) appts.reload();
+  };
   return (
     <div className="grid-2">
       <Panel title="Verification">
@@ -20,11 +31,17 @@ export function DoctorOverview() {
         {profile?.verificationNote && <small>Note: {profile.verificationNote}</small>}
       </Panel>
       <Panel title="Upcoming appointments" action={<Link to="/app/appointments" className="text-link">All</Link>}>
+        {meetAction.error && <Alert kind="error">{meetAction.error}</Alert>}
         {appts.loading ? <Loading /> : upcoming.length === 0 ? <Empty icon={<CalendarDays size={22} />} title="No upcoming appointments" /> :
           <ul className="list">{upcoming.slice(0, 5).map((a) => (
             <li key={a.id}>
               <div><strong>{a.patientName}</strong><small>{fmtDateTime(a.start)} · {a.mode === "online" ? "Online" : "In person"}</small></div>
               <div className="row-actions">
+                {a.mode === "online" && (
+                  <button className="button button-small" onClick={() => startMeet(a)} disabled={meetAction.busy}>
+                    <Video size={13} /> {a.googleMeetUrl ? "Start Google Meet" : "Meet Lobby"}
+                  </button>
+                )}
                 <button className="button button-small" onClick={() => setChatApptId(a.id)}>
                   <MessageSquare size={13} /> Chat
                 </button>
@@ -33,6 +50,7 @@ export function DoctorOverview() {
           ))}</ul>}
       </Panel>
       {chatApptId && <ConsultationChatModal appointmentId={chatApptId} onClose={() => setChatApptId(null)} />}
+      {meetApptId && <GoogleMeetLobbyModal appointmentId={meetApptId} onClose={() => setMeetApptId(null)} />}
     </div>
   );
 }
@@ -291,6 +309,16 @@ export function DoctorAppointments() {
     if (res) list.reload();
   };
 
+  const handleStartMeet = async (appointment: any) => {
+    if (!appointment.googleMeetUrl) {
+      setMeetApptId(appointment.id);
+      return;
+    }
+    window.open(appointment.googleMeetUrl, "_blank", "noopener,noreferrer");
+    const res = await action.run(() => post(`/appointments/${appointment.id}/request-join`));
+    if (res) list.reload();
+  };
+
   if (list.loading) return <Loading />;
   if (list.error) return <Alert kind="error">{list.error}</Alert>;
   return (
@@ -319,6 +347,11 @@ export function DoctorAppointments() {
               {a.mode === "online" && ["confirmed", "completed"].includes(a.status) && (
                 <button className="button button-small" onClick={() => setMeetApptId(a.id)}>
                   <Video size={14} /> Meet Lobby
+                </button>
+              )}
+              {a.mode === "online" && a.status === "confirmed" && a.googleMeetUrl && (
+                <button className="button button-small" onClick={() => handleStartMeet(a)} disabled={action.busy}>
+                  <Video size={14} /> Start Google Meet
                 </button>
               )}
               {(a.status === "pending" || a.status === "awaiting_confirmation") && (
