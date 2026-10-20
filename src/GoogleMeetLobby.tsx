@@ -19,6 +19,7 @@ import {
 import { get, post } from "./api";
 import { useAuth } from "./auth";
 import { Alert, Badge, fmtDateTime, Loading, useAction, useLoad } from "./ui";
+import { navigate } from "./router";
 
 /* -------------------------
    Types
@@ -137,6 +138,11 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
     if (res) reload();
   };
 
+  const handleConnectCalendar = () => {
+    onClose();
+    navigate("/app/profile");
+  };
+
   const handleJoinMeet = async () => {
     if (!appt?.googleMeetUrl) return;
     window.open(appt.googleMeetUrl, "_blank", "noopener,noreferrer");
@@ -228,6 +234,16 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
                       Join Google Meet
                     </button>
                   )}
+                  {appt.lobbyStatus === "both_ready" && !appt.googleMeetUrl && isDoctor && (
+                    <button
+                      className="button meet-ready-join-btn"
+                      onClick={appt.meetStatus === "auth_required" ? handleConnectCalendar : handleRetryMeet}
+                      disabled={action.busy || appt.meetStatus === "preparing"}
+                    >
+                      {appt.meetStatus === "auth_required" ? <CalendarCheck size={16} /> : <Video size={16} />}
+                      {appt.meetStatus === "auth_required" ? "Connect Google Calendar" : appt.meetStatus === "preparing" ? "Preparing Meet…" : "Create Google Meet"}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -301,14 +317,17 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
                         <strong>Connect Google Calendar to generate Meet link</strong>
                         <p>Go to your Profile page to connect Google Calendar. Once connected, the Meet link will be generated automatically.</p>
                       </div>
+                      <button className="outline-button" onClick={handleConnectCalendar}>
+                        Connect Google Calendar
+                      </button>
                     </div>
                   )}
 
                   {/* Retry failed meet */}
-                  {appt.meetStatus === "failed" && (
+                  {!appt.googleMeetUrl && appt.meetStatus !== "auth_required" && appt.meetStatus !== "preparing" && isDoctor && (
                     <button className="outline-button" onClick={handleRetryMeet} disabled={action.busy}>
                       <RefreshCw size={15} />
-                      Retry Google Meet Generation
+                      {appt.meetStatus === "failed" ? "Retry Google Meet Generation" : "Create Google Meet Link"}
                     </button>
                   )}
 
@@ -321,6 +340,14 @@ export function GoogleMeetLobbyModal({ appointmentId, onClose, onComplete }: Goo
                         <p>The video conference is being set up. This usually takes a few seconds.</p>
                       </div>
                     </div>
+                  )}
+
+                  {!appt.googleMeetUrl && isPatient && appt.status === "confirmed" && (
+                    <Alert kind="info">
+                      {appt.meetStatus === "auth_required"
+                        ? "You are ready. The doctor needs to connect Google Calendar before the Meet link can be created."
+                        : "You are ready. Waiting for the doctor to create the Google Meet link."}
+                    </Alert>
                   )}
 
                   {/* Google Meet Join Button */}

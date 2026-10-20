@@ -39,7 +39,7 @@ export function DoctorOverview() {
               <div className="row-actions">
                 {a.mode === "online" && (
                   <button className="button button-small" onClick={() => startMeet(a)} disabled={meetAction.busy}>
-                    <Video size={13} /> {a.googleMeetUrl ? "Start Google Meet" : "Meet Lobby"}
+                    <Video size={13} /> {a.googleMeetUrl ? "Start Google Meet" : "Set up Google Meet"}
                   </button>
                 )}
                 <button className="button button-small" onClick={() => setChatApptId(a.id)}>
@@ -344,14 +344,14 @@ export function DoctorAppointments() {
               <button className="button button-small" onClick={() => setChatApptId(a.id)}>
                 <MessageSquare size={14} /> Chat
               </button>
-              {a.mode === "online" && ["confirmed", "completed"].includes(a.status) && (
-                <button className="button button-small" onClick={() => setMeetApptId(a.id)}>
-                  <Video size={14} /> Meet Lobby
+              {a.mode === "online" && a.status === "confirmed" && (
+                <button className="button button-small" onClick={() => a.googleMeetUrl ? handleStartMeet(a) : setMeetApptId(a.id)} disabled={action.busy}>
+                  <Video size={14} /> {a.googleMeetUrl ? "Start Google Meet" : "Set up Google Meet"}
                 </button>
               )}
-              {a.mode === "online" && a.status === "confirmed" && a.googleMeetUrl && (
-                <button className="button button-small" onClick={() => handleStartMeet(a)} disabled={action.busy}>
-                  <Video size={14} /> Start Google Meet
+              {a.mode === "online" && a.status === "completed" && (
+                <button className="button button-small" onClick={() => setMeetApptId(a.id)}>
+                  <Video size={14} /> Meet Lobby
                 </button>
               )}
               {(a.status === "pending" || a.status === "awaiting_confirmation") && (
