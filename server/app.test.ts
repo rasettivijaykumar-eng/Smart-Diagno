@@ -103,6 +103,11 @@ describe("Smart Diagno platform", () => {
             lat: "18.2", lon: "78.459", display_name: "Far Pharmacy, Telangana",
             address: { road: "Far Road", city: "Outside radius" },
           },
+          {
+            osm_type: "node", osm_id: 125, type: "pharmacy", name: "",
+            lat: "17.39", lon: "78.46", display_name: "Unnamed Pharmacy, Hyderabad",
+            address: { road: "Nearby Road", city: "Hyderabad" },
+          },
         ]), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response("", { status: 503 });
@@ -113,14 +118,16 @@ describe("Smart Diagno platform", () => {
       const response = await client.call("GET", path);
       assert.equal(response.status, 200);
       assert.equal(response.body.mapListingsAvailable, true);
-      assert.equal(response.body.shops.length, 1);
+      assert.equal(typeof response.body.googlePlacesConfigured, "boolean");
+      assert.equal(response.body.shops.length, 2);
       assert.equal(response.body.shops[0].name, "Nearby Pharmacy");
       assert.equal(response.body.shops[0].source, "openstreetmap");
+      assert.equal(response.body.shops[1].name, "Unnamed Pharmacy");
       const defaultRadius = await client.call("GET", "/api/places/pharmacies?lat=17.3843&lng=78.4583");
       assert.equal(defaultRadius.body.radiusKm, 29);
-      assert.equal(defaultRadius.body.shops.length, 1);
+      assert.equal(defaultRadius.body.shops.length, 2);
       const callsAfterInitialSearch = providerCalls;
-      assert.equal((await client.call("GET", path)).body.shops.length, 1);
+      assert.equal((await client.call("GET", path)).body.shops.length, 2);
       assert.equal(providerCalls, callsAfterInitialSearch);
     } finally {
       globalThis.fetch = originalFetch;

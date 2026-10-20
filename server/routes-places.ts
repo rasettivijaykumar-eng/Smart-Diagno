@@ -142,7 +142,7 @@ async function fromNominatimPharmacies(lat: number, lng: number, radiusKm: numbe
       if (!Number.isFinite(placeLat) || !Number.isFinite(placeLng)) return [];
       const exactDistance = distanceKm(lat, lng, placeLat, placeLng);
       if (exactDistance > radiusKm) return [];
-      const name = String(place.name ?? place.display_name?.split(",")[0] ?? "Pharmacy").trim();
+      const name = String(place.name || place.display_name?.split(",")[0] || "Pharmacy").trim();
       const address = [
         place.address?.road,
         place.address?.suburb ?? place.address?.neighbourhood,
@@ -779,6 +779,7 @@ placesRouter.get("/places/pharmacies", async (request, response) => {
     center: { lat, lng },
     radiusKm,
     mapListingsAvailable: mapResults.available,
+    googlePlacesConfigured: Boolean(process.env.GOOGLE_MAPS_API_KEY),
   });
 });
 

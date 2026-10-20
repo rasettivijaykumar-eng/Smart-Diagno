@@ -39,7 +39,7 @@ publicRouter.get("/config", (_request, response) => {
     googleClientId: process.env.GOOGLE_CLIENT_ID || null,
     aiConfigured: Boolean(process.env.GEMINI_API_KEY),
     demoAccounts: db.meta.demoSeeded && process.env.SHOW_DEMO === "true" ? { password: db.meta.demoPassword, emails: db.meta.demoEmails } : null,
-    integrations: { email: false, sms: false, push: false, video: false, payments: false, mapsApi: false },
+    integrations: { email: false, sms: false, push: false, video: false, payments: false, mapsApi: Boolean(process.env.GOOGLE_MAPS_API_KEY) },
   });
 });
 
