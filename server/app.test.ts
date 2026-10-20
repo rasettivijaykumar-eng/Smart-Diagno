@@ -153,21 +153,16 @@ describe("Smart Diagno platform", () => {
           boundingbox: ["13.40", "13.45", "79.55", "79.62"],
         }]), { status: 200, headers: { "content-type": "application/json" } });
       }
-      if (url.startsWith("https://places.googleapis.com/v1/places:searchText")) {
+      if (url.startsWith("https://places.googleapis.com/v1/places:searchNearby")) {
         const body = JSON.parse(String(init?.body));
-        assert.match(body.textQuery, /517581/);
-        return new Response(JSON.stringify({ error: { message: "Places API (New) is not enabled." } }), { status: 403 });
-      }
-      if (url.startsWith("https://maps.googleapis.com/maps/api/place/textsearch/json?")) {
-        const params = new URL(url).searchParams;
-        assert.equal(params.get("key"), "test-key");
-        assert.match(params.get("query") ?? "", /517581/);
+        assert.deepEqual(body.includedTypes, ["pharmacy"]);
+        assert.ok(body.locationRestriction.circle.radius >= 100);
+        assert.ok(body.locationRestriction.circle.radius < 50_000);
         return new Response(JSON.stringify({
-          status: "OK",
-          results: [
-            { place_id: "local-google", name: "Google Local Pharmacy", formatted_address: "Narayanavanam, Andhra Pradesh 517581, India", geometry: { location: { lat: 13.42, lng: 79.58 } } },
-            { place_id: "wrong-postal", name: "Wrong Postal Pharmacy", formatted_address: "Narayanavanam, Andhra Pradesh 517502, India", geometry: { location: { lat: 13.42, lng: 79.58 } } },
-            { place_id: "outside", name: "Outside Village Pharmacy", formatted_address: "Andhra Pradesh 517581, India", geometry: { location: { lat: 13.50, lng: 79.58 } } },
+          places: [
+            { id: "local-google", displayName: { text: "Google Local Pharmacy" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517581, India", location: { latitude: 13.42, longitude: 79.58 } },
+            { id: "wrong-postal", displayName: { text: "Wrong Postal Pharmacy" }, formattedAddress: "Narayanavanam, Andhra Pradesh 517502, India", location: { latitude: 13.42, longitude: 79.58 } },
+            { id: "outside", displayName: { text: "Outside Village Pharmacy" }, formattedAddress: "Andhra Pradesh 517581, India", location: { latitude: 13.50, longitude: 79.58 } },
           ],
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
