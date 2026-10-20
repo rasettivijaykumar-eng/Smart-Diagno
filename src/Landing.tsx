@@ -59,7 +59,7 @@ export function Landing() {
   const { user } = useAuth();
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || !("IntersectionObserver" in window)) return;
-    const els = Array.from(document.querySelectorAll<HTMLElement>(".feature, .steps li, .privacy-grid li, .section-head, .panel-card, .faq-list details"));
+    const els = Array.from(document.querySelectorAll<HTMLElement>(".feature, .steps li, .privacy-grid li, .section-head, .split > div, .panel-card, .faq-list details"));
     els.forEach((el, i) => { el.classList.add("sr"); el.style.transitionDelay = `${(i % 4) * 90}ms`; });
     const io = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: 0.12 });
     els.forEach((el) => io.observe(el));
@@ -74,7 +74,8 @@ export function Landing() {
       <main id="main">
         <section className="hero"><div className="hero-inner">
           <div className="hero-copy reveal">
-            <span className="eyebrow"><span className="eyebrow-line" /> CARE NAVIGATION · SMART DIAGNOSIS</span>
+            <img className="hero-copy-logo" src="/smart-diagno-logo.png" alt="Smart Diagno" />
+            <span className="eyebrow"><span className="eyebrow-line" /> CARE NAVIGATION · SMART DIAGNOSIS.</span>
             <h1>Your next step in care, <em>made clearer.</em></h1>
             <p className="hero-description">Find a verified doctor, book a consultation, keep your health history close, and coordinate with a pharmacy — with your consent at every step.</p>
             <div className="hero-actions">
@@ -84,7 +85,6 @@ export function Landing() {
             <p className="hero-assurance"><ShieldCheck size={15} /> Not for emergencies — call your local emergency number.</p>
           </div>
           <div className="hero-art" aria-hidden="true">
-            <img className="hero-logo" src="/smart-diagno-logo.png" alt="" />
             <span className="float-chip c1"><Stethoscope size={16} /> Verified doctors</span>
             <span className="float-chip c2"><Pill size={16} /> Smart reminders</span>
             <span className="float-chip c3"><HeartPulse size={16} /> Health timeline</span>
