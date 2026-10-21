@@ -1091,6 +1091,31 @@ const ALARM_REPEAT_MINUTES = 3;
 const ALARM_SOUND_DB = "smart-diagno-alarm-sounds";
 const ALARM_SOUND_STORE = "patient-sounds";
 const ALARM_SOUND_MAX_BYTES = 10 * 1024 * 1024;
+const ALARM_AUDIO_TYPES: Record<string, string> = {
+  mp3: "audio/mpeg",
+  mpeg: "audio/mpeg",
+  mpg: "audio/mpeg",
+  mpga: "audio/mpeg",
+  wav: "audio/wav",
+  wave: "audio/wav",
+  flac: "audio/flac",
+  ogg: "audio/ogg",
+  oga: "audio/ogg",
+  opus: "audio/ogg",
+  m4a: "audio/mp4",
+  mp4: "audio/mp4",
+  aac: "audio/aac",
+  webm: "audio/webm",
+  weba: "audio/webm",
+  aif: "audio/aiff",
+  aiff: "audio/aiff",
+  mid: "audio/midi",
+  midi: "audio/midi",
+  amr: "audio/amr",
+  caf: "audio/x-caf",
+  "3gp": "audio/3gpp",
+  "3gpp": "audio/3gpp",
+};
 type AlarmEntry = { medicine: string; color?: string; dueAt: number; lastRangAt?: number; acknowledged?: boolean };
 type StoredAlarmSound = { name: string; blob: Blob };
 
@@ -1402,15 +1427,19 @@ export function Medicines() {
     event.currentTarget.value = "";
     if (!file || !user?.id) return;
     setSoundError("");
-    if (!file.name.toLowerCase().endsWith(".mp3") || (file.type && !["audio/mpeg", "audio/mp3"].includes(file.type))) {
-      setSoundError("Choose an MP3 audio file.");
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const inferredType = ALARM_AUDIO_TYPES[extension];
+    const player = new Audio();
+    const audioType = [file.type, inferredType].find((type) => type?.startsWith("audio/") && player.canPlayType(type));
+    if (!audioType) {
+      setSoundError("Choose an audio file this browser can play, such as MP3, WAV, OGG, M4A, AAC, or WebM.");
       return;
     }
     if (file.size > ALARM_SOUND_MAX_BYTES) {
-      setSoundError("The MP3 must be 10 MB or smaller.");
+      setSoundError("The audio file must be 10 MB or smaller.");
       return;
     }
-    const sound = { name: file.name, blob: file.slice(0, file.size, "audio/mpeg") };
+    const sound = { name: file.name, blob: file.slice(0, file.size, audioType) };
     try {
       await saveAlarmSound(user.id, sound);
       setCustomAlarmSound(sound);
@@ -1497,8 +1526,8 @@ export function Medicines() {
             <Field label="Repeat interval (minutes)">
               <input type="number" min={1} max={60} step={1} value={repeatMinutes} onChange={(event) => updateRepeatMinutes(Number(event.target.value))} />
             </Field>
-            <Field label="Shared alarm sound (MP3, optional)">
-              <input type="file" accept=".mp3,audio/mpeg,audio/mp3" onChange={(event) => void saveCustomAlarmSound(event)} />
+            <Field label="Shared alarm sound (audio file, optional)">
+              <input type="file" accept="audio/*" onChange={(event) => void saveCustomAlarmSound(event)} />
             </Field>
             {customAlarmSound && <div className="medicine-alarm-sound-actions">
               <span className="muted">Using {customAlarmSound.name}</span>
