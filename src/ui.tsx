@@ -19,7 +19,14 @@ export function useLoad<T>(loader: () => Promise<T>, deps: unknown[] = []) {
 }
 
 export function Loading({ label = "Loading…" }: { label?: string }) {
-  return <div className="ui-loading" role="status"><Loader2 size={18} className="spin" /> {label}</div>;
+  return (
+    <div className="ui-loading" role="status">
+      <svg className="ui-loading-ring" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+      </svg>
+      {label}
+    </div>
+  );
 }
 
 export function Skeleton({ lines = 3 }: { lines?: number }) {

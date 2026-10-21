@@ -173,7 +173,7 @@ function Dashboard() {
           <div className="topbar-right"><span className="user-chip">{user.name}</span><Notifications />
             <button className="outline-button" aria-label="Sign out" onClick={async () => { await logout(); navigate("/"); }}><LogOut size={15} /> Sign out</button></div>
         </header>
-        <main id="main" className="content">
+        <main id="main" className="content content-motion">
           {pending && <Alert kind="warn"><strong>Verification {profile.verification === "rejected" ? "was not approved" : "pending"}.</strong> You can complete your profile now, but listings, bookings, prescribing and orders stay disabled until an administrator verifies you. <Badge tone="warn">{humanize(profile.verification)}</Badge>{profile.verificationNote ? ` Note: ${profile.verificationNote}` : ""}</Alert>}
           {body()}
         </main>

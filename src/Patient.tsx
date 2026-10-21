@@ -7,6 +7,7 @@ import { BookingModal, DoctorSearch } from "./DoctorSearch";
 import { ConsultationChatModal } from "./ConsultationChat";
 import { GoogleMeetLobbyModal } from "./GoogleMeetLobby";
 import { PatientPharmacyChats, PharmacyConversation } from "./PharmacyChat";
+import { HealthScanner } from "./motion";
 import { Link, navigate } from "./router";
 import { detectDeviceLocation, PHARMACY_SEARCH_RADIUS_KM } from "./location";
 import { Alert, Badge, Empty, Field, fmtDate, fmtDateTime, humanize, Loading, Modal, Panel, statusTone, SubmitButton, useAction, useLoad } from "./ui";
@@ -446,6 +447,15 @@ export function Assistant() {
               </div>
             </div>
           )}
+
+          {/* Decorative scanner — not a diagnosis indicator */}
+          <div className="assistant-scan-slot" aria-hidden="true">
+            <HealthScanner
+              inline
+              active={sending || loadingChat}
+              label={sending ? "Waiting for assistant response — illustrative scan only" : "Illustrative scanner — not a medical reading"}
+            />
+          </div>
 
           {/* Messages Scroll Area */}
           <div className="chat-messages-scroll" ref={messagesScrollRef}>

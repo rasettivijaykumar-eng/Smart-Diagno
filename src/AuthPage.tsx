@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, Building2, Eye, EyeOff, MapPin, ShieldCheck, Stethoscope, Pill, UserRound } from "lucide-react";
+import { ArrowLeft, Building2, Eye, EyeOff, HeartPulse, MapPin, Pill, ShieldCheck, Stethoscope, UserRound } from "lucide-react";
 import { get, post } from "./api";
 import { useAuth, type User } from "./auth";
 import { Brand } from "./Landing";
 import { COUNTRIES, INDIA_STATES } from "./locationData";
+import { AmbientParticles } from "./motion";
 import { Link, navigate } from "./router";
 import { Alert, Field, Loading, SubmitButton, useAction } from "./ui";
 
@@ -350,6 +351,12 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const demo = config?.demoAccounts;
   return (
     <div className="auth-page">
+      <div className="m-auth-accents" aria-hidden="true">
+        <AmbientParticles count={10} />
+        <span className="m-med-icon m-float" style={{ top: "18%", left: "6%", opacity: 0.55 }}><Stethoscope size={16} /></span>
+        <span className="m-med-icon m-med-icon--teal m-drift m-delay-2" style={{ top: "62%", right: "8%", opacity: 0.5 }}><HeartPulse size={16} /></span>
+        <span className="m-med-icon m-med-icon--green m-float-slow m-delay-3" style={{ bottom: "12%", left: "22%", opacity: 0.45 }}><Pill size={16} /></span>
+      </div>
       <aside className="auth-aside">
         <Brand />
         <div>
