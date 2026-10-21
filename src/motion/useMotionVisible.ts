@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefCallback } from "react";
 
 /** Pause continuous animations when the element is off-screen. */
-export function useMotionVisible<T extends HTMLElement>(rootMargin = "80px"): [RefObject<T | null>, boolean] {
+export function useMotionVisible<T extends HTMLElement>(rootMargin = "80px"): [RefCallback<T>, boolean] {
   const ref = useRef<T | null>(null);
+  const setRef = useCallback((element: T | null) => {
+    ref.current = element;
+  }, []);
   const [visible, setVisible] = useState(true);
 
   useEffect(() => {
@@ -20,5 +23,5 @@ export function useMotionVisible<T extends HTMLElement>(rootMargin = "80px"): [R
     return () => io.disconnect();
   }, [rootMargin]);
 
-  return [ref, visible];
+  return [setRef, visible];
 }
