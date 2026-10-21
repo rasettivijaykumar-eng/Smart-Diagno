@@ -13,10 +13,14 @@ const defaults = [
   { top: "88%", left: "8%", "--px": "12px", "--py": "-10px", delay: "-3.6s" },
   { top: "36%", left: "92%", "--px": "-14px", "--py": "6px", delay: "-2s" },
   { top: "48%", left: "30%", "--px": "9px", "--py": "-15px", delay: "-1.4s" },
+  { top: "6%", left: "34%", "--px": "-7px", "--py": "11px", delay: "-5s" },
+  { top: "94%", left: "52%", "--px": "11px", "--py": "-9px", delay: "-2.2s" },
+  { top: "70%", left: "84%", "--px": "-5px", "--py": "13px", delay: "-3.8s" },
+  { top: "22%", left: "4%", "--px": "13px", "--py": "-7px", delay: "-4.6s" },
 ] as const;
 
 /** Slow drifting ambient dots for atmosphere. */
-export function AmbientParticles({ count = 12, className = "" }: { count?: number; className?: string }) {
+export function AmbientParticles({ count = 16, className = "" }: { count?: number; className?: string }) {
   const items = defaults.slice(0, Math.min(count, defaults.length));
   return (
     <div className={`m-particles ${className}`.trim()} aria-hidden="true">

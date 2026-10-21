@@ -17,11 +17,13 @@ export function useLocation() {
   return location;
 }
 
-export function Link({ to, children, ...rest }: { to: string; children: ReactNode } & AnchorHTMLAttributes<HTMLAnchorElement>) {
-  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
+export function Link({ to, children, onClick, ...rest }: { to: string; children: ReactNode } & AnchorHTMLAttributes<HTMLAnchorElement>) {
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    onClick?.(event);
+    if (event.defaultPrevented) return;
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
     event.preventDefault();
     navigate(to);
   };
-  return <a href={to} onClick={onClick} {...rest}>{children}</a>;
+  return <a href={to} onClick={handleClick} {...rest}>{children}</a>;
 }

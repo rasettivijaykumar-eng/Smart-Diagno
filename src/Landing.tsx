@@ -5,21 +5,25 @@ import {
   Cross,
   HeartPulse,
   MapPin,
+  Menu,
   MessageCircleHeart,
   Pill,
   Scan,
   ShieldCheck,
   Stethoscope,
+  X,
 } from "lucide-react";
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { useAuth } from "./auth";
 import {
   AmbientParticles,
   DnaHelix,
   EcgWaveform,
   HealthScanner,
+  NeuralMesh,
   OrbitalRings,
   useMotionVisible,
+  usePointerTilt,
   useSectionReveal,
 } from "./motion";
 import { Link } from "./router";
@@ -49,6 +53,15 @@ const faqs = [
   ["Is this for emergencies?", "No. In an emergency, call your local emergency number or go to the nearest emergency department."],
 ];
 
+const tickerItems = [
+  "Verified doctors",
+  "Real booking slots",
+  "Consent-based sharing",
+  "Digital prescriptions",
+  "Pharmacy coordination",
+  "Health timeline",
+];
+
 export function Brand() {
   return <Link to="/" className="brand" aria-label="Smart Diagno home"><img className="brand-logo" src="/smart-diagno-logo.png" alt="Smart Diagno" /></Link>;
 }
@@ -64,69 +77,142 @@ function useHeaderScroll(headerRef: RefObject<HTMLElement | null>) {
   }, [headerRef]);
 }
 
+function SiteNavLinks({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <>
+      <a href="/#features" onClick={onNavigate}>Features</a>
+      <a href="/#how" onClick={onNavigate}>How it works</a>
+      <a href="/#privacy" onClick={onNavigate}>Privacy</a>
+      <a href="/#faq" onClick={onNavigate}>FAQ</a>
+      <Link to="/doctors" onClick={onNavigate}>Find doctors</Link>
+    </>
+  );
+}
+
 export function SiteHeader() {
   const { user } = useAuth();
   const headerRef = useRef<HTMLElement>(null);
+  const [open, setOpen] = useState(false);
+  const drawerId = useId();
   useHeaderScroll(headerRef);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [open]);
+
+  const close = () => setOpen(false);
+
   return (
-    <header ref={headerRef} className="site-header"><div className="site-header-inner">
-      <Brand />
-      <nav aria-label="Primary" className="site-nav">
-        <a href="/#features">Features</a><a href="/#how">How it works</a><a href="/#privacy">Privacy</a><a href="/#faq">FAQ</a><Link to="/doctors">Find doctors</Link>
-      </nav>
-      <div className="site-actions">{user ? <Link to="/app" className="button button-small">Open dashboard</Link> : <><Link to="/login" className="text-link">Sign in</Link><Link to="/register" className="button button-small">Get started</Link></>}</div>
-    </div></header>
+    <header ref={headerRef} className="site-header">
+      <div className="site-header-inner">
+        <Brand />
+        <nav aria-label="Primary" className="site-nav">
+          <SiteNavLinks />
+        </nav>
+        <div className="site-actions">
+          {user ? <Link to="/app" className="button button-small">Open dashboard</Link> : <><Link to="/login" className="text-link">Sign in</Link><Link to="/register" className="button button-small">Get started</Link></>}
+          <button
+            type="button"
+            className="mobile-menu-button landing-menu-button"
+            aria-label="Open menu"
+            aria-expanded={open}
+            aria-controls={drawerId}
+            onClick={() => setOpen(true)}
+          >
+            <Menu size={20} />
+          </button>
+        </div>
+      </div>
+      {open ? (
+        <div className="mobile-drawer-backdrop landing-drawer-backdrop" onClick={close}>
+          <aside
+            id={drawerId}
+            className="mobile-drawer landing-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Site menu"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="mobile-drawer-header">
+              <Brand />
+              <button type="button" className="icon-btn mobile-drawer-close" aria-label="Close menu" onClick={close}>
+                <X size={20} />
+              </button>
+            </header>
+            <nav className="landing-drawer-nav" aria-label="Mobile">
+              <SiteNavLinks onNavigate={close} />
+            </nav>
+            <div className="landing-drawer-actions">
+              {user ? <Link to="/app" className="button" onClick={close}>Open dashboard</Link> : <>
+                <Link to="/login" className="outline-button" onClick={close}>Sign in</Link>
+                <Link to="/register" className="button" onClick={close}>Get started</Link>
+              </>}
+            </div>
+          </aside>
+        </div>
+      ) : null}
+    </header>
   );
 }
 
 export function SiteFooter() {
   return (
-    <footer className="site-footer"><div className="footer-inner">
-      <Brand />
-      <p>Smart Diagno helps you navigate care. It does not diagnose, prescribe, or replace emergency services.</p>
-      <small>Legal, clinical and privacy review is required before real-world use.</small>
-    </div></footer>
+    <footer className="site-footer">
+      <div className="footer-ecg" aria-hidden="true"><EcgWaveform /></div>
+      <div className="footer-inner">
+        <Brand />
+        <p>Smart Diagno helps you navigate care. It does not diagnose, prescribe, or replace emergency services.</p>
+        <small>Legal, clinical and privacy review is required before real-world use.</small>
+      </div>
+    </footer>
   );
 }
 
 function HeroArt() {
   const [hudRef, visible] = useMotionVisible<HTMLDivElement>();
+  const tiltRef = usePointerTilt<HTMLDivElement>(9);
+
   return (
     <div ref={hudRef} className={`hero-art hero-hud${visible ? "" : " motion-paused"}`} aria-hidden="true">
-      <AmbientParticles count={12} />
+      <AmbientParticles count={16} />
+      <span className="m-scan-ring" />
+      <span className="m-scan-ring m-scan-ring--late" />
       <OrbitalRings />
-      <DnaHelix style={{ top: 24, right: 18 }} />
-      <DnaHelix className="m-delay-2" style={{ bottom: 48, left: 4, width: 40, height: 100, opacity: 0.55 }} />
+      <DnaHelix style={{ top: 8, right: 10 }} />
+      <DnaHelix className="m-delay-2" style={{ bottom: 28, left: 10, width: 42, height: 108, opacity: 0.5 }} />
 
-      <span className="m-med-icon m-float" style={{ top: 18, left: 28 }}><Stethoscope size={18} /></span>
-      <span className="m-med-icon m-med-icon--teal m-drift m-delay-1" style={{ top: 90, right: 8 }}><ShieldCheck size={18} /></span>
-      <span className="m-med-icon m-med-icon--green m-float-slow m-delay-2" style={{ bottom: 110, left: 8 }}><Pill size={18} /></span>
-      <span className="m-med-icon m-med-icon--red m-float-fast m-delay-3" style={{ bottom: 36, right: 56 }}><HeartPulse size={18} /></span>
-      <span className="m-med-icon m-drift m-delay-4" style={{ top: 200, left: -6 }}><Scan size={16} /></span>
-      <span className="m-med-icon m-med-icon--teal m-float m-delay-2" style={{ top: 48, left: "42%" }}><Cross size={16} /></span>
+      <span className="m-med-icon m-float" style={{ top: 22, left: 18 }}><Stethoscope size={18} /></span>
+      <span className="m-med-icon m-med-icon--teal m-drift m-delay-1" style={{ top: 108, right: 4 }}><ShieldCheck size={18} /></span>
+      <span className="m-med-icon m-med-icon--green m-float-slow m-delay-2" style={{ bottom: 128, left: 2 }}><Pill size={18} /></span>
+      <span className="m-med-icon m-med-icon--red m-float-fast m-delay-3" style={{ bottom: 42, right: 48 }}><HeartPulse size={18} /></span>
+      <span className="m-med-icon m-drift m-delay-4" style={{ top: 214, left: -4 }}><Scan size={16} /></span>
+      <span className="m-med-icon m-med-icon--teal m-float m-delay-2" style={{ top: 52, left: "46%" }}><Cross size={16} /></span>
 
-      <div className="m-ui-card m-float" style={{ top: 0, left: -8 }}>
+      <div className="m-ui-card m-float" style={{ top: 6, left: -6 }}>
         <span className="m-ui-card-icon"><MessageCircleHeart size={14} /></span>
         <span>AI Health Assistant<small>Illustrative workflow</small></span>
       </div>
-      <div className="m-ui-card m-float-slow m-delay-1" style={{ top: 56, right: -12 }}>
+      <div className="m-ui-card m-float-slow m-delay-1" style={{ top: 78, right: -8 }}>
         <span className="m-ui-card-icon" style={{ background: "linear-gradient(120deg,#0fa89a,#2bb673)" }}><Stethoscope size={14} /></span>
         <span>Doctor Consultation<small>Illustrative — no patient data</small></span>
       </div>
-      <div className="m-ui-card m-drift m-delay-2" style={{ bottom: 72, left: -20 }}>
+      <div className="m-ui-card m-drift m-delay-2" style={{ bottom: 86, left: -16 }}>
         <span className="m-ui-card-icon" style={{ background: "linear-gradient(120deg,#0b2f5b,#0a6ed1)" }}><ClipboardList size={14} /></span>
         <span>Health Report Analysis<small>Illustrative sample</small></span>
       </div>
-      <div className="m-ui-card m-float-fast m-delay-3" style={{ bottom: 8, right: 12 }}>
+      <div className="m-ui-card m-float-fast m-delay-3" style={{ bottom: 4, right: 8 }}>
         <span className="m-ui-card-icon" style={{ background: "linear-gradient(120deg,#00b3d7,#0fa89a)" }}><CalendarCheck size={14} /></span>
         <span>Appointment Reminder<small>Illustrative only</small></span>
       </div>
 
-      <span className="float-chip c1"><Stethoscope size={16} /> Verified doctors</span>
-      <span className="float-chip c2"><Pill size={16} /> Smart reminders</span>
-      <span className="float-chip c3"><HeartPulse size={16} /> Health timeline</span>
-
-      <div className="hero-hud-core">
+      <div ref={tiltRef} className="hero-hud-core">
         <div className="hero-card">
           <HealthScanner active={false} label="" />
           <div className="hero-card-row"><span className="dot ok" /> Dr. verified by administrator</div>
@@ -144,55 +230,95 @@ function HeroArt() {
 export function Landing() {
   const { user } = useAuth();
   const wrapRef = useRef<HTMLDivElement>(null);
-  useSectionReveal(wrapRef);
+  useSectionReveal(wrapRef, ".feature, .steps li, .privacy-grid li, .section-head, .split > div, .panel-card, .faq-list details, .how-steps-wrap, .landing-ticker");
 
   return (
-    <div className="landing-wrap" ref={wrapRef}>
+    <div className="landing-wrap landing-live" ref={wrapRef}>
       <div className="blobs" aria-hidden="true"><span className="blob b1" /><span className="blob b2" /><span className="blob b3" /><span className="blob b4" /></div>
       <div className="crosses" aria-hidden="true">{Array.from({ length: 8 }, (_, i) => <span key={i} className="cross" />)}</div>
       <a className="skip-link" href="#main">Skip to content</a>
       <SiteHeader />
       <main id="main">
-        <section className="hero"><div className="hero-inner">
-          <div className="hero-copy reveal">
-            <img className="hero-copy-logo" src="/smart-diagno-logo.png" alt="Smart Diagno" />
-            <span className="eyebrow"><span className="eyebrow-line" /> CARE NAVIGATION · SMART DIAGNOSIS.</span>
-            <h1>Your next step in care, <em className="m-em-grad">made clearer.</em></h1>
-            <p className="hero-description">Find a verified doctor, book a consultation, keep your health history close, and coordinate with a pharmacy — with your consent at every step.</p>
-            <div className="hero-actions">
-              {user ? <Link to="/app" className="button">Open your dashboard</Link> : <><Link to="/register" className="button">Create free account</Link><Link to="/login" className="text-link">Sign in</Link></>}
-              <Link to="/doctors" className="text-link">Browse doctors</Link>
+        <section className="hero">
+          <div className="hero-inner">
+            <div className="hero-copy reveal">
+              <img className="hero-copy-logo" src="/smart-diagno-logo.png" alt="Smart Diagno" />
+              <span className="eyebrow"><span className="eyebrow-line" /> CARE NAVIGATION · SMART DIAGNOSIS.</span>
+              <h1>Your next step in care, <em className="m-em-grad">made clearer.</em></h1>
+              <p className="hero-description">Find a verified doctor, book a consultation, keep your health history close, and coordinate with a pharmacy — with your consent at every step.</p>
+              <div className="hero-actions">
+                {user ? <Link to="/app" className="button">Open your dashboard</Link> : <><Link to="/register" className="button">Create free account</Link><Link to="/login" className="text-link">Sign in</Link></>}
+                <Link to="/doctors" className="text-link">Browse doctors</Link>
+              </div>
+              <p className="hero-assurance"><ShieldCheck size={15} /> Not for emergencies — call your local emergency number.</p>
             </div>
-            <p className="hero-assurance"><ShieldCheck size={15} /> Not for emergencies — call your local emergency number.</p>
+            <HeroArt />
           </div>
-          <HeroArt />
-        </div></section>
+          <div className="landing-ticker" aria-hidden="true">
+            <div className="landing-ticker-track">
+              {[...tickerItems, ...tickerItems].map((item, i) => (
+                <span key={`${item}-${i}`}><HeartPulse size={14} /> {item}</span>
+              ))}
+            </div>
+          </div>
+        </section>
 
-        <section id="features" className="section"><div className="section-head"><span className="eyebrow">What you can do</span><h2>Everything from symptom to pharmacy, in one place</h2></div>
-          <ul className="feature-grid">{features.map((f) => <li key={f.title} className="feature reveal"><span className="feature-icon">{f.icon}</span><h3>{f.title}</h3><p>{f.text}</p></li>)}</ul>
+        <section id="features" className="section">
+          <div className="section-head">
+            <span className="eyebrow">What you can do</span>
+            <h2>Everything from symptom to pharmacy, in one place</h2>
+          </div>
+          <ul className="feature-grid">
+            {features.map((f) => (
+              <li key={f.title} className="feature reveal">
+                <span className="feature-icon">{f.icon}</span>
+                <h3>{f.title}</h3>
+                <p>{f.text}</p>
+              </li>
+            ))}
+          </ul>
         </section>
 
         <section id="how" className="section section-tint">
           <div className="section-head"><span className="eyebrow">How it works</span><h2>Four steps</h2></div>
           <div className="how-steps-wrap">
-            <ol className="steps">{steps.map(([t, d], i) => <li key={t} className="reveal"><span className="step-n">{i + 1}</span><h3>{t}</h3><p>{d}</p></li>)}</ol>
+            <span className="how-courier" aria-hidden="true" />
+            <ol className="steps">
+              {steps.map(([t, d], i) => (
+                <li key={t} className="reveal">
+                  <span className="step-n">{i + 1}</span>
+                  <h3>{t}</h3>
+                  <p>{d}</p>
+                </li>
+              ))}
+            </ol>
           </div>
         </section>
 
         <section className="section split">
-          <div><span className="eyebrow">For clinicians & pharmacies</span><h2>Built for the whole care team</h2>
+          <div>
+            <span className="eyebrow">For clinicians & pharmacies</span>
+            <h2>Built for the whole care team</h2>
             <p>Doctors publish availability, review shared history and issue digital prescriptions. Pharmacies review prescriptions patients share, send itemised quotations and update order status. Both must be verified by an administrator before using these workflows.</p>
-            <div className="hero-actions"><Link to="/register" className="button">Register as doctor or pharmacy</Link></div></div>
+            <div className="hero-actions"><Link to="/register" className="button">Register as doctor or pharmacy</Link></div>
+          </div>
           <div className="panel-card m-care-panel">
-            <AmbientParticles count={6} />
+            <AmbientParticles count={8} />
+            <NeuralMesh />
             <HealthScanner active={false} label="" />
             <h3>Verification first</h3>
-            <ul className="bullets"><li>Credentials reviewed before listing</li><li>Unverified accounts can't book, prescribe or take orders</li><li>Rules enforced on the server, not just hidden buttons</li></ul>
+            <ul className="bullets">
+              <li>Credentials reviewed before listing</li>
+              <li>Unverified accounts can't book, prescribe or take orders</li>
+              <li>Rules enforced on the server, not just hidden buttons</li>
+            </ul>
             <small className="muted" style={{ position: "relative", zIndex: 1 }}>Illustrative accent — no clinical claim.</small>
           </div>
         </section>
 
-        <section id="privacy" className="section section-dark"><div className="section-head"><span className="eyebrow">Privacy & safety</span><h2>You stay in control of your health data</h2></div>
+        <section id="privacy" className="section section-dark">
+          <div className="privacy-orbit" aria-hidden="true" />
+          <div className="section-head"><span className="eyebrow">Privacy & safety</span><h2>You stay in control of your health data</h2></div>
           <ul className="privacy-grid">
             <li><span className="privacy-icon-wrap"><span className="privacy-ring" /><ShieldCheck size={20} /></span><h3>Consent-based sharing</h3><p>You decide whether a doctor sees your history and which pharmacy receives a prescription.</p></li>
             <li><span className="privacy-icon-wrap"><span className="privacy-ring" /><ShieldCheck size={20} /></span><h3>Audited access</h3><p>Doctor and administrator access to sensitive data is logged.</p></li>
@@ -201,8 +327,16 @@ export function Landing() {
           </ul>
         </section>
 
-        <section id="faq" className="section"><div className="section-head"><span className="eyebrow">FAQ</span><h2>Questions, answered plainly</h2></div>
-          <div className="faq-list">{faqs.map(([q, a]) => <details key={q}><summary>{q}<ChevronDown size={16} /></summary><p>{a}</p></details>)}</div>
+        <section id="faq" className="section">
+          <div className="section-head"><span className="eyebrow">FAQ</span><h2>Questions, answered plainly</h2></div>
+          <div className="faq-list">
+            {faqs.map(([q, a]) => (
+              <details key={q}>
+                <summary>{q}<ChevronDown size={16} /></summary>
+                <p>{a}</p>
+              </details>
+            ))}
+          </div>
         </section>
       </main>
       <SiteFooter />

@@ -1,16 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type RefCallback } from "react";
+import { useCallback, useEffect, useState, type RefCallback } from "react";
 
 /** Pause continuous animations when the element is off-screen. */
 export function useMotionVisible<T extends HTMLElement>(rootMargin = "80px"): [RefCallback<T>, boolean] {
-  const ref = useRef<T | null>(null);
-  const setRef = useCallback((element: T | null) => {
-    ref.current = element;
-  }, []);
+  const [node, setNode] = useState<T | null>(null);
   const [visible, setVisible] = useState(true);
+  const setRef = useCallback((element: T | null) => setNode(element), []);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el || !("IntersectionObserver" in window)) return;
+    if (!node || !("IntersectionObserver" in window)) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       setVisible(false);
       return;
@@ -19,9 +16,9 @@ export function useMotionVisible<T extends HTMLElement>(rootMargin = "80px"): [R
       ([entry]) => setVisible(entry.isIntersecting),
       { threshold: 0.05, rootMargin },
     );
-    io.observe(el);
+    io.observe(node);
     return () => io.disconnect();
-  }, [rootMargin]);
+  }, [node, rootMargin]);
 
   return [setRef, visible];
 }
