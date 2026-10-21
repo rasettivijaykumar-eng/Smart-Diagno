@@ -1495,6 +1495,10 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
 .pharmacy-chat-form { display: flex; gap: 8px; align-items: flex-end; }
 .pharmacy-chat-form textarea { flex: 1; resize: vertical; min-height: 44px; }
 .medicine-reminder-form { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(150px, .7fr) auto; align-items: end; gap: 12px; }
+.medicine-alarm-settings { display: grid; grid-template-columns: minmax(180px, .6fr) minmax(240px, 1fr); align-items: end; gap: 14px; }
+.medicine-alarm-settings input[type="file"] { max-width: 100%; }
+.medicine-alarm-sound-actions { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.medicine-active-alarms .outline-button { flex: none; }
 
 @media (max-width: 600px) {
   .pharmacy-request-form { padding: 12px; }
@@ -1502,4 +1506,7 @@ hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
   .nearby-pharmacy-card > a { margin-left: 26px; }
   .pharmacy-chat-form { align-items: stretch; flex-direction: column; }
   .medicine-reminder-form { grid-template-columns: 1fr; }
+  .medicine-alarm-settings { grid-template-columns: 1fr; }
+  .medicine-alarm-sound-actions { grid-column: auto; }
+  .medicine-active-alarms li { align-items: flex-start; flex-direction: column; }
 }

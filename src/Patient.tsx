@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { Activity, AlertTriangle, Bell, Building2, CalendarDays, Download, Eye, EyeOff, FileText, HeartPulse, HelpCircle, Info, LocateFixed, MapPin, MessageSquare, Navigation, Pill, Plus, Search, Send, ShieldAlert, Sparkles, Star, Stethoscope, Trash2, Upload, UserPlus, Video, Volume2, X } from "lucide-react";
 import { del, get, patch, post, put } from "./api";
 import { useAuth } from "./auth";
@@ -1087,31 +1087,130 @@ function Symptoms() {
 type Dose = { key: string; rxId: string; itemIndex: number; name: string; detail: string; at: Date; status: "taken" | "skipped" | "due" | "upcoming" | "unacknowledged" };
 const GRACE_MS = 60 * 60_000;
 const SNOOZE_KEY = "sd_snooze";
-const ALARM_ALERTED_KEY = "sd_alarm_alerted_v2";
+const ALARM_REPEAT_MINUTES = 3;
+const ALARM_SOUND_DB = "smart-diagno-alarm-sounds";
+const ALARM_SOUND_STORE = "patient-sounds";
+const ALARM_SOUND_MAX_BYTES = 10 * 1024 * 1024;
+type AlarmEntry = { medicine: string; color?: string; dueAt: number; lastRangAt?: number; acknowledged?: boolean };
+type StoredAlarmSound = { name: string; blob: Blob };
 
-async function playMedicineAlarm(context: AudioContext, medicine: string, color?: string) {
-  await context.resume();
-  const start = context.currentTime;
-  for (let i = 0; i < 4; i += 1) {
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    const onset = start + i * 0.55;
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(i % 2 === 0 ? 880 : 660, onset);
-    gain.gain.setValueAtTime(0.001, onset);
-    gain.gain.exponentialRampToValueAtTime(0.65, onset + 0.04);
-    gain.gain.setValueAtTime(0.65, onset + 0.3);
-    gain.gain.exponentialRampToValueAtTime(0.001, onset + 0.42);
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start(onset);
-    oscillator.stop(onset + 0.44);
+const alarmLedgerKey = (userId: string) => `sd_alarm_ledger_v1:${userId}`;
+const alarmIntervalKey = (userId: string) => `sd_alarm_interval_v1:${userId}`;
+
+function openAlarmSoundDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      reject(new Error("This browser cannot save a custom alarm sound."));
+      return;
+    }
+    const request = indexedDB.open(ALARM_SOUND_DB, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(ALARM_SOUND_STORE)) request.result.createObjectStore(ALARM_SOUND_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("Could not open alarm sound storage."));
+  });
+}
+
+async function getStoredAlarmSound(userId: string): Promise<StoredAlarmSound | null> {
+  const db = await openAlarmSoundDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(ALARM_SOUND_STORE, "readonly");
+    const request = transaction.objectStore(ALARM_SOUND_STORE).get(userId);
+    request.onsuccess = () => resolve((request.result as StoredAlarmSound | undefined) ?? null);
+    request.onerror = () => reject(request.error ?? new Error("Could not load the saved alarm sound."));
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error("Could not load the saved alarm sound.")); };
+    transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error("Could not load the saved alarm sound.")); };
+  });
+}
+
+async function saveAlarmSound(userId: string, sound: StoredAlarmSound | null): Promise<void> {
+  const db = await openAlarmSoundDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(ALARM_SOUND_STORE, "readwrite");
+    const store = transaction.objectStore(ALARM_SOUND_STORE);
+    if (sound) store.put(sound, userId);
+    else store.delete(userId);
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error("Could not save the alarm sound.")); };
+    transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error("Could not save the alarm sound.")); };
+  });
+}
+
+function readAlarmLedger(userId: string): Record<string, AlarmEntry> {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(alarmLedgerKey(userId)) ?? "{}");
+    if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, AlarmEntry>;
+  } catch (error) {
+    console.warn("Could not read saved medicine alarm state.", error);
   }
-  await new Promise((resolve) => window.setTimeout(resolve, 2_400));
+  return {};
+}
+
+async function playMedicineAlarm(
+  context: AudioContext,
+  medicine: string,
+  color: string | undefined,
+  soundUrl: string | null,
+  activeAudio: MutableRefObject<HTMLAudioElement | null>,
+  isCancelled: () => boolean,
+) {
+  await context.resume();
+  if (soundUrl) {
+    await new Promise<void>((resolve, reject) => {
+      const audio = new Audio(soundUrl);
+      activeAudio.current = audio;
+      audio.loop = true;
+      let finished = false;
+      const finish = (error?: Error) => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timeout);
+        audio.removeEventListener("pause", onPause);
+        audio.removeEventListener("error", onError);
+        if (activeAudio.current === audio) activeAudio.current = null;
+        if (error) reject(error);
+        else resolve();
+      };
+      const onPause = () => finish();
+      const onError = () => finish(new Error("Could not play the selected MP3 alarm."));
+      const timeout = window.setTimeout(() => { audio.pause(); finish(); }, 30_000);
+      audio.addEventListener("pause", onPause);
+      audio.addEventListener("error", onError, { once: true });
+      audio.play().catch(() => finish(new Error("The selected MP3 alarm could not be played by this browser.")));
+    });
+  } else {
+    const start = context.currentTime;
+    for (let i = 0; i < 4; i += 1) {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const onset = start + i * 0.55;
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(i % 2 === 0 ? 880 : 660, onset);
+      gain.gain.setValueAtTime(0.001, onset);
+      gain.gain.exponentialRampToValueAtTime(0.65, onset + 0.04);
+      gain.gain.setValueAtTime(0.65, onset + 0.3);
+      gain.gain.exponentialRampToValueAtTime(0.001, onset + 0.42);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(onset);
+      oscillator.stop(onset + 0.44);
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 2_400));
+  }
+  if (isCancelled()) return;
   const shade = color && color !== "Not specified" ? `, color ${color}` : ", color not specified";
   const phrase = `Tablet ${medicine}${shade}.`;
   const utterance = new SpeechSynthesisUtterance(Array(3).fill(phrase).join(" "));
-  window.speechSynthesis.speak(utterance);
+  await new Promise<void>((resolve, reject) => {
+    utterance.onend = () => resolve();
+    utterance.onerror = (event) => {
+      if (event.error === "canceled" || event.error === "interrupted") resolve();
+      else reject(new Error("Could not speak the medicine alarm."));
+    };
+    window.speechSynthesis.speak(utterance);
+  });
 }
 
 function buildDoses(prescriptions: Rx[], logs: DoseLog[], snoozed: Record<string, number>): Dose[] {
@@ -1147,39 +1246,84 @@ export function Medicines() {
   const [manualTime, setManualTime] = useState("");
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [soundError, setSoundError] = useState("");
+  const [customAlarmSound, setCustomAlarmSound] = useState<StoredAlarmSound | null>(null);
+  const [customAlarmUrl, setCustomAlarmUrl] = useState<string | null>(null);
+  const [repeatMinutes, setRepeatMinutes] = useState(ALARM_REPEAT_MINUTES);
+  const [alarmLedger, setAlarmLedger] = useState<Record<string, AlarmEntry>>({});
+  const [alarmLedgerReady, setAlarmLedgerReady] = useState(false);
   const soundContext = useRef<AudioContext | null>(null);
+  const activeAudio = useRef<HTMLAudioElement | null>(null);
+  const activeAudioKey = useRef<string | null>(null);
+  const cancelledAlarms = useRef(new Set<string>());
   const alarmQueue = useRef(Promise.resolve());
   const [snoozed, setSnoozed] = useState<Record<string, number>>(() => { try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}"); } catch { return {}; } });
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 5_000); return () => clearInterval(t); }, []);
 
+  useEffect(() => {
+    if (!user?.id) {
+      setAlarmLedger({});
+      setAlarmLedgerReady(false);
+      return;
+    }
+    setAlarmLedgerReady(false);
+    setAlarmLedger(readAlarmLedger(user.id));
+    try {
+      const storedInterval = Number(localStorage.getItem(alarmIntervalKey(user.id)));
+      setRepeatMinutes(Number.isInteger(storedInterval) && storedInterval >= 1 && storedInterval <= 60 ? storedInterval : ALARM_REPEAT_MINUTES);
+    } catch (error) {
+      setSoundError(error instanceof Error ? error.message : "Could not load alarm settings.");
+      setRepeatMinutes(ALARM_REPEAT_MINUTES);
+    }
+    setAlarmLedgerReady(true);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    getStoredAlarmSound(user.id).then((sound) => {
+      if (!cancelled) setCustomAlarmSound(sound);
+    }).catch((error: unknown) => {
+      if (!cancelled) setSoundError(error instanceof Error ? error.message : "Could not load the saved alarm sound.");
+    });
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!customAlarmSound) {
+      setCustomAlarmUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(customAlarmSound.blob);
+    setCustomAlarmUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [customAlarmSound]);
+
   const doses = useMemo(() => buildDoses(rx.data?.prescriptions ?? [], logs.data?.doseLogs ?? [], snoozed), [rx.data, logs.data, snoozed, Date.now() / 5_000 | 0]);
-  const queueAlarm = useCallback((medicine: string, color?: string) => {
+  const queueAlarm = useCallback((key: string, medicine: string, color?: string) => {
     alarmQueue.current = alarmQueue.current.then(async () => {
-      if (soundContext.current) await playMedicineAlarm(soundContext.current, medicine, color);
+      if (!soundContext.current || cancelledAlarms.current.has(key)) return;
+      activeAudioKey.current = key;
+      try {
+        await playMedicineAlarm(soundContext.current, medicine, color, customAlarmUrl, activeAudio, () => cancelledAlarms.current.has(key));
+      } finally {
+        if (activeAudioKey.current === key) activeAudioKey.current = null;
+      }
     }).catch((error: unknown) => {
       setSoundError(error instanceof Error ? error.message : "Could not play the medicine alarm.");
     });
-  }, []);
+  }, [customAlarmUrl]);
 
   useEffect(() => {
+    if (!alarmLedgerReady || !user?.id) return;
     const canNotify = Boolean(user?.preferences.browserNotifications && typeof Notification !== "undefined" && Notification.permission === "granted");
-    if (!canNotify && !soundEnabled) return;
-    let stored: string[] = [];
-    try {
-      const parsed: unknown = JSON.parse(sessionStorage.getItem(ALARM_ALERTED_KEY) ?? "[]");
-      if (Array.isArray(parsed)) stored = parsed.filter((item): item is string => typeof item === "string");
-    } catch { stored = []; }
-    const alerted = new Set<string>(stored);
     const now = Date.now();
+    const dueAlarms: Array<{ key: string; medicine: string; color?: string; dueAt: number }> = [];
     for (const dose of doses) {
       const elapsed = now - dose.at.getTime();
-      const key = `prescription:${dose.key}`;
-      if (elapsed < 0 || elapsed > 60_000 || dose.status === "taken" || dose.status === "skipped" || alerted.has(key)) continue;
+      if (elapsed < 0 || elapsed >= 24 * 60 * 60_000 || dose.status === "taken" || dose.status === "skipped") continue;
       const item = rx.data?.prescriptions.find((prescription) => prescription.id === dose.rxId)?.items[dose.itemIndex];
-      if (canNotify) new Notification("Medicine reminder", { body: `${dose.name}${item?.color ? `, color ${item.color}` : ""} (${dose.detail}) is scheduled now.` });
-      if (soundEnabled) queueAlarm(dose.name, item?.color);
-      alerted.add(key);
+      dueAlarms.push({ key: `prescription:${dose.key}`, medicine: dose.name, color: item?.color, dueAt: dose.at.getTime() });
     }
     const current = new Date();
     const dayKey = `${current.getFullYear()}-${current.getMonth()}-${current.getDate()}`;
@@ -1189,17 +1333,112 @@ export function Medicines() {
       due.setHours(hour, minute, 0, 0);
       const key = `manual:${reminder.id}:${dayKey}`;
       const elapsed = current.getTime() - due.getTime();
-      if (elapsed < 0 || elapsed > 60_000 || alerted.has(key)) continue;
-      if (canNotify) new Notification("Medicine reminder", { body: `Time to take ${reminder.medicine}${reminder.color ? `, color ${reminder.color}` : ""}.` });
-      if (soundEnabled) queueAlarm(reminder.medicine, reminder.color);
-      alerted.add(key);
+      if (elapsed < 0 || elapsed >= 24 * 60 * 60_000) continue;
+      dueAlarms.push({ key, medicine: reminder.medicine, color: reminder.color, dueAt: due.getTime() });
     }
-    sessionStorage.setItem(ALARM_ALERTED_KEY, JSON.stringify([...alerted]));
-  }, [doses, reminders.data, rx.data, soundEnabled, user, queueAlarm]);
+    const nextLedger = { ...alarmLedger };
+    let changed = false;
+    for (const [key, entry] of Object.entries(nextLedger)) {
+      if (now - entry.dueAt >= 24 * 60 * 60_000) {
+        delete nextLedger[key];
+        changed = true;
+      }
+    }
+    for (const alarm of dueAlarms) {
+      let entry = nextLedger[alarm.key];
+      if (entry?.acknowledged) continue;
+      if (!entry) {
+        entry = { medicine: alarm.medicine, color: alarm.color, dueAt: alarm.dueAt };
+        nextLedger[alarm.key] = entry;
+        changed = true;
+      }
+      if ((!entry.lastRangAt || now - entry.lastRangAt >= repeatMinutes * 60_000) && (soundEnabled || canNotify)) {
+        if (canNotify) new Notification("Medicine reminder", { body: `${alarm.medicine}${alarm.color ? `, color ${alarm.color}` : ""} is due now.` });
+        if (soundEnabled) queueAlarm(alarm.key, alarm.medicine, alarm.color);
+        entry.lastRangAt = now;
+        changed = true;
+      }
+    }
+    if (changed) {
+      setAlarmLedger(nextLedger);
+      try {
+        localStorage.setItem(alarmLedgerKey(user.id), JSON.stringify(nextLedger));
+      } catch (error) {
+        setSoundError(error instanceof Error ? error.message : "Could not save medicine alarm status.");
+      }
+    }
+  }, [alarmLedger, alarmLedgerReady, doses, queueAlarm, reminders.data, repeatMinutes, rx.data, soundEnabled, user]);
 
   const snooze = (key: string) => { const next = { ...snoozed, [key]: Date.now() + 10 * 60_000 }; setSnoozed(next); localStorage.setItem(SNOOZE_KEY, JSON.stringify(next)); };
   const action = useAction();
   const reminderAction = useAction();
+  const acknowledgeAlarm = (key: string) => {
+    const entry = alarmLedger[key];
+    if (!entry || !user?.id) return;
+    const next = { ...alarmLedger, [key]: { ...entry, acknowledged: true } };
+    setAlarmLedger(next);
+    try {
+      localStorage.setItem(alarmLedgerKey(user.id), JSON.stringify(next));
+    } catch (error) {
+      setSoundError(error instanceof Error ? error.message : "Could not save alarm acknowledgement.");
+    }
+    cancelledAlarms.current.add(key);
+    if (activeAudioKey.current === key) {
+      activeAudio.current?.pause();
+      window.speechSynthesis?.cancel();
+    }
+  };
+  const updateRepeatMinutes = (value: number) => {
+    if (!Number.isInteger(value) || value < 1 || value > 60 || !user?.id) return;
+    setRepeatMinutes(value);
+    try {
+      localStorage.setItem(alarmIntervalKey(user.id), String(value));
+    } catch (error) {
+      setSoundError(error instanceof Error ? error.message : "Could not save the alarm repeat interval.");
+    }
+  };
+  const saveCustomAlarmSound = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || !user?.id) return;
+    setSoundError("");
+    if (!file.name.toLowerCase().endsWith(".mp3") || (file.type && !["audio/mpeg", "audio/mp3"].includes(file.type))) {
+      setSoundError("Choose an MP3 audio file.");
+      return;
+    }
+    if (file.size > ALARM_SOUND_MAX_BYTES) {
+      setSoundError("The MP3 must be 10 MB or smaller.");
+      return;
+    }
+    const sound = { name: file.name, blob: file.slice(0, file.size, "audio/mpeg") };
+    try {
+      await saveAlarmSound(user.id, sound);
+      setCustomAlarmSound(sound);
+    } catch (error) {
+      setSoundError(error instanceof Error ? error.message : "Could not save the custom alarm sound.");
+    }
+  };
+  const removeCustomAlarmSound = async () => {
+    if (!user?.id) return;
+    setSoundError("");
+    try {
+      await saveAlarmSound(user.id, null);
+      setCustomAlarmSound(null);
+    } catch (error) {
+      setSoundError(error instanceof Error ? error.message : "Could not remove the custom alarm sound.");
+    }
+  };
+  const previewAlarmSound = async () => {
+    if (!customAlarmUrl) return;
+    try {
+      const audio = new Audio(customAlarmUrl);
+      activeAudio.current = audio;
+      await audio.play();
+      audio.addEventListener("ended", () => { if (activeAudio.current === audio) activeAudio.current = null; }, { once: true });
+    } catch (error) {
+      setSoundError(error instanceof Error ? error.message : "Could not preview the MP3 alarm.");
+    }
+  };
   const enableSound = async () => {
     setSoundError("");
     if (!("AudioContext" in window) || !("speechSynthesis" in window)) {
@@ -1214,7 +1453,12 @@ export function Medicines() {
       setSoundError(error instanceof Error ? error.message : "Could not enable sound alarms.");
     }
   };
-  const record = async (dose: Dose, status: "taken" | "skipped") => { if (await action.run(() => post("/dose-logs", { prescriptionId: dose.rxId, itemIndex: dose.itemIndex, scheduledAt: dose.at.toISOString(), status }))) logs.reload(); };
+  const record = async (dose: Dose, status: "taken" | "skipped") => {
+    if (await action.run(() => post("/dose-logs", { prescriptionId: dose.rxId, itemIndex: dose.itemIndex, scheduledAt: dose.at.toISOString(), status }))) {
+      acknowledgeAlarm(`prescription:${dose.key}`);
+      logs.reload();
+    }
+  };
   const addReminder = async (event: React.FormEvent) => {
     event.preventDefault();
     if (await reminderAction.run(() => post("/medicine-reminders", { medicine: manualMedicine, color: manualColor, time: manualTime }))) {
@@ -1232,6 +1476,9 @@ export function Medicines() {
   const todays = doses.filter((d) => d.at.toDateString() === today);
   const history = doses.filter((d) => d.at.getTime() <= Date.now() && !todays.includes(d)).reverse();
   const unack = doses.filter((d) => d.status === "unacknowledged");
+  const activeAlarms = Object.entries(alarmLedger)
+    .filter(([, entry]) => !entry.acknowledged && Date.now() - entry.dueAt < 24 * 60 * 60_000)
+    .sort(([, first], [, second]) => first.dueAt - second.dueAt);
 
   return (
     <div className="stack-lg">
@@ -1239,11 +1486,39 @@ export function Medicines() {
       {tab === "reminders" && (rx.loading || logs.loading || reminders.loading ? <Loading /> : <>
         <NotificationSettings />
         <Alert>
-          <strong>Audible alarms:</strong> The alarm rings first, then speaks the tablet name and color three times.{" "}
+          <strong>Audible alarms:</strong> A shared MP3 plays for up to 30 seconds, then the medicine name and color are spoken three times. The alarm repeats until acknowledged.{" "}
           {soundEnabled ? <Badge tone="good">Sound alarms on for this page</Badge> : <button className="outline-button" onClick={() => void enableSound()}><Volume2 size={14} /> Enable sound alarms</button>}
           {soundError && <small> {soundError}</small>}
         </Alert>
         {action.error && <Alert kind="error">{action.error}</Alert>}
+        <Panel title="Alarm preferences" kicker="Shared by all medicine alarms">
+          <p className="muted">Choose how often an unacknowledged alarm repeats. Your MP3 is saved in this browser for your account and can be replaced or removed at any time.</p>
+          <div className="medicine-alarm-settings">
+            <Field label="Repeat interval (minutes)">
+              <input type="number" min={1} max={60} step={1} value={repeatMinutes} onChange={(event) => updateRepeatMinutes(Number(event.target.value))} />
+            </Field>
+            <Field label="Shared alarm sound (MP3, optional)">
+              <input type="file" accept=".mp3,audio/mpeg,audio/mp3" onChange={(event) => void saveCustomAlarmSound(event)} />
+            </Field>
+            {customAlarmSound && <div className="medicine-alarm-sound-actions">
+              <span className="muted">Using {customAlarmSound.name}</span>
+              <button className="outline-button" type="button" onClick={() => void previewAlarmSound()}>Preview sound</button>
+              <button className="outline-button" type="button" onClick={() => void removeCustomAlarmSound()}>Remove sound</button>
+            </div>}
+          </div>
+          {soundError && <Alert kind="error">{soundError}</Alert>}
+        </Panel>
+        {activeAlarms.length > 0 && <Panel title="Alarms needing acknowledgement" kicker="Repeats until acknowledged">
+          <ul className="list medicine-active-alarms">
+            {activeAlarms.map(([key, entry]) => (
+              <li key={key}>
+                <div><strong>{entry.medicine}</strong><small>{entry.color || "Color not specified"} · Due {new Date(entry.dueAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div>
+                <button className="outline-button" type="button" onClick={() => acknowledgeAlarm(key)}>Acknowledge alarm</button>
+              </li>
+            ))}
+          </ul>
+          <small className="muted">Acknowledging stops repeat alerts only; it does not record a dose as taken or skipped.</small>
+        </Panel>}
         <Panel title="Add a medicine alarm" kicker="Daily reminder">
           <Alert>Set a reminder for a medicine you already take as directed. This does not create a prescription or change your treatment. Alarms work only while Smart Diagno is open on this page. Enter the tablet color so the voice alert can identify it.</Alert>
           <form className="medicine-reminder-form" onSubmit={addReminder}>
