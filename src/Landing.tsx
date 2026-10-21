@@ -1,5 +1,5 @@
 import { CalendarCheck, ChevronDown, ClipboardList, HeartPulse, MapPin, Pill, ShieldCheck, Stethoscope } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAuth } from "./auth";
 import { Link } from "./router";
 
@@ -34,8 +34,17 @@ export function Brand() {
 
 export function SiteHeader() {
   const { user } = useAuth();
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const updateScrolledState = () => header.classList.toggle("is-scrolled", window.scrollY > 8);
+    updateScrolledState();
+    window.addEventListener("scroll", updateScrolledState, { passive: true });
+    return () => window.removeEventListener("scroll", updateScrolledState);
+  }, []);
   return (
-    <header className="site-header"><div className="site-header-inner">
+    <header ref={headerRef} className="site-header"><div className="site-header-inner">
       <Brand />
       <nav aria-label="Primary" className="site-nav">
         <a href="/#features">Features</a><a href="/#how">How it works</a><a href="/#privacy">Privacy</a><a href="/#faq">FAQ</a><Link to="/doctors">Find doctors</Link>
@@ -59,9 +68,11 @@ export function Landing() {
   const { user } = useAuth();
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || !("IntersectionObserver" in window)) return;
-    const els = Array.from(document.querySelectorAll<HTMLElement>(".feature, .steps li, .privacy-grid li, .section-head, .split > div, .panel-card, .faq-list details"));
+    const landing = document.querySelector(".landing-wrap");
+    if (!landing) return;
+    const els = Array.from(landing.querySelectorAll<HTMLElement>(".feature, .steps li, .privacy-grid li, .section-head, .split > div, .panel-card, .faq-list details"));
     els.forEach((el, i) => { el.classList.add("sr"); el.style.transitionDelay = `${(i % 4) * 90}ms`; });
-    const io = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: 0.12 });
+    const io = new IntersectionObserver((entries) => entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: 0.08, rootMargin: "0px 0px -32px 0px" });
     els.forEach((el) => io.observe(el));
     return () => io.disconnect();
   }, []);
