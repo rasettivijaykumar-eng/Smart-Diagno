@@ -118,6 +118,7 @@ body { background: radial-gradient(900px 500px at 5% -5%, #c9f0f866, transparent
 .section-head h2, .split h2 { color: var(--navy); font-weight: 800; letter-spacing: -1.2px; }
 .section-tint { background: linear-gradient(135deg, #e3f2fc, #dff7f3 60%, #e7f8ec); }
 .section-dark { background: linear-gradient(135deg, #082a52, #0a5fc0 60%, #0792b5); position: relative; overflow: hidden; }
+.section-dark .section-head .eyebrow { color: var(--navy); }
 .section-dark::before { content: ""; position: absolute; width: 400px; height: 400px; border-radius: 50%; background: #2bb673; filter: blur(110px); opacity: .3; top: -120px; right: -80px; animation: blob 16s ease-in-out infinite; }
 .feature { border: 0; border-radius: 22px; padding: 28px; box-shadow: var(--shadow); position: relative; overflow: hidden; --c1: #0a6ed1; --c2: #00b3d7; }
 .feature::before { content: ""; position: absolute; left: 0; top: 0; height: 5px; width: 100%; background: linear-gradient(90deg, var(--c1), var(--c2)); }
