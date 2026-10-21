@@ -16,30 +16,62 @@ const roleOptions: Array<{ id: Role; label: string; text: string; icon: React.Re
 ];
 
 function GoogleButton({ clientId, role, onDone }: { clientId: string; role: Role; onDone: (user: User) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const slotRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLDivElement>(null);
   const action = useAction();
   useEffect(() => {
-    const init = () => {
+    let initialized = false;
+    let renderedWidth = 0;
+    const render = () => {
       const google = (window as any).google;
-      if (!google?.accounts?.id || !ref.current) return;
-      google.accounts.id.initialize({
-        client_id: clientId,
-        callback: async (response: { credential: string }) => {
-          const result = await action.run(() => post<{ user: User }>("/auth/google", { credential: response.credential, role }));
-          if (result) onDone(result.user);
-        },
-      });
-      google.accounts.id.renderButton(ref.current, { theme: "outline", size: "large", width: 320, text: "continue_with" });
+      const slotWidth = slotRef.current?.clientWidth ?? 0;
+      const width = Math.min(320, Math.floor(slotWidth));
+      if (!google?.accounts?.id || !buttonRef.current || width < 1) return;
+
+      if (!initialized) {
+        google.accounts.id.initialize({
+          client_id: clientId,
+          callback: async (response: { credential: string }) => {
+            const result = await action.run(() => post<{ user: User }>("/auth/google", { credential: response.credential, role }));
+            if (result) onDone(result.user);
+          },
+        });
+        initialized = true;
+      }
+
+      if (width !== renderedWidth) {
+        buttonRef.current.replaceChildren();
+        google.accounts.id.renderButton(buttonRef.current, { theme: "outline", size: "large", width, text: "continue_with" });
+        renderedWidth = width;
+      }
     };
-    if ((window as any).google?.accounts) { init(); return; }
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.onload = init;
-    document.head.appendChild(script);
+
+    const slot = slotRef.current;
+    const observer = slot && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(render)
+      : null;
+    if (slot && observer) observer.observe(slot);
+    window.addEventListener("resize", render);
+
+    let script: HTMLScriptElement | null = null;
+    if ((window as any).google?.accounts?.id) {
+      render();
+    } else {
+      script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.addEventListener("load", render);
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", render);
+      script?.removeEventListener("load", render);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientId, role]);
-  return <div className="google-slot"><div ref={ref} />{action.error && <Alert kind="error">{action.error}</Alert>}</div>;
+  return <div className="google-slot" ref={slotRef}><div ref={buttonRef} />{action.error && <Alert kind="error">{action.error}</Alert>}</div>;
 }
 
 export function AuthPage({ mode }: { mode: "login" | "register" }) {

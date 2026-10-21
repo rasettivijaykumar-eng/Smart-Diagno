@@ -103,6 +103,8 @@ export function Assistant() {
   const [bookingDoctor, setBookingDoctor] = useState<{ id: string; name: string } | null>(null);
   const [hospitalNotice, setHospitalNotice] = useState<{ hospital: any; reason: "auth" | "no-doctor" } | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
+  const chatLayoutRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-detect real location via IP then refine with GPS if permitted
   useEffect(() => {
@@ -181,6 +183,37 @@ export function Assistant() {
     const messages = messagesScrollRef.current;
     messages?.scrollTo({ top: messages.scrollHeight, behavior: "smooth" });
   }, [activeChat?.messages, sending]);
+
+  useEffect(() => {
+    const layout = chatLayoutRef.current;
+    if (!layout) return;
+
+    const viewport = window.visualViewport;
+    const updateViewportHeight = () => {
+      layout.style.setProperty(
+        "--assistant-viewport-height",
+        `${Math.round(viewport?.height ?? window.innerHeight)}px`,
+      );
+
+      const composer = composerRef.current;
+      if (composer && document.activeElement === composer && viewport) {
+        const bounds = composer.getBoundingClientRect();
+        const visibleBottom = viewport.offsetTop + viewport.height;
+        if (bounds.bottom > visibleBottom || bounds.top < viewport.offsetTop) {
+          composer.scrollIntoView({ block: "nearest", behavior: "auto" });
+        }
+      }
+    };
+
+    updateViewportHeight();
+    viewport?.addEventListener("resize", updateViewportHeight);
+    window.addEventListener("resize", updateViewportHeight);
+    return () => {
+      viewport?.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("resize", updateViewportHeight);
+      layout.style.removeProperty("--assistant-viewport-height");
+    };
+  }, []);
 
   // Create new chat
   const handleNewChat = async () => {
@@ -279,7 +312,7 @@ export function Assistant() {
         This assistant cannot diagnose, prescribe, or advise on medicine doses. Its list of warning signs is not exhaustive. If you feel in danger, call your local emergency number now.
       </Alert>
 
-      <div className="chat-layout">
+      <div className="chat-layout" ref={chatLayoutRef}>
         {/* Chat History Sidebar */}
         <aside className="chat-history-pane">
           <div className="chat-history-header">
@@ -763,6 +796,7 @@ export function Assistant() {
 
             <div className="chat-input-row">
               <textarea
+                ref={composerRef}
                 rows={2}
                 value={concern}
                 onChange={(e) => setConcern(e.target.value)}
