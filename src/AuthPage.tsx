@@ -105,6 +105,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
   const [selectedDistrict, setSelectedDistrict] = useState("Hyderabad");
   const [selectedVillage, setSelectedVillage] = useState("Ameerpet");
   const [customVillage, setCustomVillage] = useState("");
+  const [customVillageMode, setCustomVillageMode] = useState(false);
 
   const set = (key: string) => (event: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: event.target.value });
   const isPharmacyPostalCodeValid = (country: string, postalCode: string) =>
@@ -296,12 +297,14 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
       setSelectedDistrict("Hyderabad");
       setSelectedVillage("Ameerpet");
       setCustomVillage("");
+      setCustomVillageMode(false);
       fetchHospitalsForLocation("India", "Telangana", "Hyderabad", "Ameerpet");
     } else {
       setSelectedState("");
       setSelectedDistrict("");
       setSelectedVillage("");
       setCustomVillage("");
+      setCustomVillageMode(false);
       fetchHospitalsForLocation(c, "", "", "");
     }
   };
@@ -314,6 +317,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     const firstVill = districts[0]?.villages?.[0] || "";
     setSelectedVillage(firstVill);
     setCustomVillage("");
+    setCustomVillageMode(false);
     fetchHospitalsForLocation(selectedCountry, s, firstDist, firstVill);
   };
 
@@ -323,12 +327,14 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
     const firstVill = villages[0] || "";
     setSelectedVillage(firstVill);
     setCustomVillage("");
+    setCustomVillageMode(false);
     fetchHospitalsForLocation(selectedCountry, selectedState, d, firstVill);
   };
 
   const handleVillageChange = (v: string) => {
     setSelectedVillage(v);
     setCustomVillage("");
+    setCustomVillageMode(false);
     fetchHospitalsForLocation(selectedCountry, selectedState, selectedDistrict, v);
   };
 
@@ -513,10 +519,11 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                       <label>4. Village / Locality / Mandal</label>
                       {selectedCountry === "India" && (INDIA_STATES[selectedState]?.districts.find((d) => d.name === selectedDistrict)?.villages?.length ?? 0) > 0 ? (
                         <select
-                          value={customVillage ? "__custom__" : selectedVillage}
+                          value={customVillageMode ? "__custom__" : selectedVillage}
                           onChange={(e) => {
                             if (e.target.value === "__custom__") {
-                              setCustomVillage(selectedVillage || "Main");
+                              setCustomVillage("");
+                              setCustomVillageMode(true);
                             } else {
                               handleVillageChange(e.target.value);
                             }
@@ -540,7 +547,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                     </div>
                   </div>
 
-                  {customVillage !== "" && (
+                  {customVillageMode && (
                     <div style={{ display: "flex", gap: "8px" }}>
                       <input
                         value={customVillage}
@@ -551,6 +558,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                       <button
                         type="button"
                         className="button button-small"
+                        disabled={!customVillage.trim()}
                         onClick={() => fetchHospitalsForLocation(selectedCountry, selectedState, selectedDistrict, customVillage)}
                       >
                         Search
@@ -560,13 +568,13 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
 
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "2px" }}>
                     <span style={{ fontSize: "12px", color: "var(--navy)", fontWeight: 600 }}>
-                      📍 Hospitals in {customVillage || selectedVillage || selectedDistrict}, {selectedDistrict} ({hospitals.length} found)
+                      📍 Hospitals in {customVillageMode ? customVillage || selectedDistrict : customVillage || selectedVillage || selectedDistrict}, {selectedDistrict} ({hospitals.length} found)
                     </span>
                     <button
                       type="button"
                       className="outline-button button-small"
                       style={{ fontSize: "11px", padding: "3px 8px" }}
-                      onClick={() => fetchHospitalsForLocation(selectedCountry, selectedState, selectedDistrict, customVillage || selectedVillage)}
+                      onClick={() => fetchHospitalsForLocation(selectedCountry, selectedState, selectedDistrict, customVillageMode ? customVillage : customVillage || selectedVillage)}
                     >
                       Refresh List
                     </button>
@@ -581,7 +589,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
                   />
 
                   {loadingHosp ? (
-                    <Loading label={`Finding hospitals in ${customVillage || selectedVillage || selectedDistrict}…`} />
+                    <Loading label={`Finding hospitals in ${customVillageMode ? customVillage || selectedDistrict : customVillage || selectedVillage || selectedDistrict}…`} />
                   ) : hospitals.length === 0 ? (
                     <div style={{ textAlign: "center", padding: "16px 10px", color: "var(--muted)", fontSize: "13px", background: "#f8fafc", borderRadius: "10px", border: "1px dashed var(--line)" }}>
                       No listed hospitals found right in this village. You can choose another nearby village or enter your clinic name manually below.

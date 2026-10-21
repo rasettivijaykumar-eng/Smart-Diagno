@@ -2132,18 +2132,123 @@ export function Orders() {
   );
 }
 
+function formatExportValue(value: unknown, depth = 0): string {
+  const indent = "  ".repeat(depth);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return `${indent}None`;
+    return value.map((item, index) => (
+      item !== null && typeof item === "object"
+        ? `${indent}Record ${index + 1}:\n${formatExportValue(item, depth + 1)}`
+        : `${indent}- ${formatExportValue(item, depth)}`
+    )).join("\n");
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value);
+    return entries.length
+      ? entries.map(([key, entry]) => {
+        const label = humanize(key.replace(/([a-z])([A-Z])/g, "$1 $2"));
+        return entry !== null && typeof entry === "object"
+          ? `${indent}${label}:\n${formatExportValue(entry, depth + 1)}`
+          : `${indent}${label}: ${formatExportValue(entry, depth)}`;
+      }).join("\n")
+      : `${indent}None`;
+  }
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
+}
+
+function exportSections(data: Record<string, unknown>) {
+  return Object.entries(data).map(([key, value]) => ({
+    title: humanize(key.replace(/([a-z])([A-Z])/g, "$1 $2")),
+    content: formatExportValue(value),
+  }));
+}
+
+function escapeRtf(value: string): string {
+  let escaped = "";
+  for (const character of value) {
+    if (character === "\\") escaped += "\\\\";
+    else if (character === "{") escaped += "\\{";
+    else if (character === "}") escaped += "\\}";
+    else if (character === "\n") escaped += "\\line ";
+    else if (character === "\r") continue;
+    else {
+      for (let index = 0; index < character.length; index += 1) {
+        const code = character.charCodeAt(index);
+        escaped += code >= 0x20 && code <= 0x7e ? character[index] : `\\u${code > 0x7fff ? code - 0x10000 : code}?`;
+      }
+    }
+  }
+  return escaped;
+}
+
+function toRtfExport(data: Record<string, unknown>): string {
+  const body = exportSections(data).map(({ title, content }) => (
+    `\\pard\\sb240\\sa120\\b\\fs28 ${escapeRtf(title)}\\b0\\fs22\\par ${escapeRtf(content)}\\par`
+  )).join("\n");
+  return `{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}\\f0\\fs22\\b Smart Diagno - Personal Data Export\\b0\\par\\par ${body}}`;
+}
+
+function writePrintableExport(printWindow: Window, data: Record<string, unknown>) {
+  const doc = printWindow.document;
+  doc.open();
+  doc.write("<!doctype html><html><head><meta charset=\"utf-8\"><title>Smart Diagno - Personal Data Export</title></head><body></body></html>");
+  doc.close();
+  const style = doc.createElement("style");
+  style.textContent = "body{font:14px Arial,sans-serif;color:#172b4d;max-width:800px;margin:32px auto;padding:0 20px}h1{font-size:24px}h2{font-size:17px;margin:24px 0 8px;border-bottom:1px solid #ccd5df;padding-bottom:6px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 Arial,sans-serif;margin:0}@media print{body{margin:12mm auto;padding:0}h2{break-after:avoid}pre{break-inside:auto}}";
+  doc.head.append(style);
+  const heading = doc.createElement("h1");
+  heading.textContent = "Smart Diagno - Personal Data Export";
+  doc.body.append(heading);
+  const note = doc.createElement("p");
+  note.textContent = "Use your browser's print dialog and choose Save as PDF.";
+  doc.body.append(note);
+  for (const section of exportSections(data)) {
+    const title = doc.createElement("h2");
+    title.textContent = section.title;
+    const content = doc.createElement("pre");
+    content.textContent = section.content;
+    doc.body.append(title, content);
+  }
+  printWindow.setTimeout(() => printWindow.print(), 300);
+}
+
 /* ---------- Settings ---------- */
 export function PatientSettings() {
   const { user, logout } = useAuth();
   const [password, setPassword] = useState("");
   const [showDelPassword, setShowDelPassword] = useState(false);
+  const [exportError, setExportError] = useState("");
   const [c, setC] = useState({ subject: "", details: "" });
   const del1 = useAction(), exp = useAction(), cmp = useAction();
-  const exportData = async () => {
-    const data = await exp.run(() => get("/me/export"));
+  const fetchExportData = () => exp.run(() => get<Record<string, unknown>>("/me/export"));
+  const downloadExport = async (format: "json" | "word") => {
+    setExportError("");
+    const data = await fetchExportData();
     if (!data) return;
-    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
-    const a = document.createElement("a"); a.href = url; a.download = "smart-diagno-export.json"; a.click(); URL.revokeObjectURL(url);
+    const content = format === "json" ? JSON.stringify(data, null, 2) : toRtfExport(data);
+    const type = format === "json" ? "application/json" : "application/rtf";
+    const extension = format === "json" ? "json" : "rtf";
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `smart-diagno-export.${extension}`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  };
+  const printExportAsPdf = async () => {
+    setExportError("");
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      setExportError("Allow pop-ups for Smart Diagno to create your PDF.");
+      return;
+    }
+    const data = await fetchExportData();
+    if (!data) {
+      printWindow.close();
+      return;
+    }
+    writePrintableExport(printWindow, data);
   };
   const remove = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2155,9 +2260,14 @@ export function PatientSettings() {
     <div className="grid-2">
       <Panel title="Account"><dl className="kv"><div><dt>Name</dt><dd>{user?.name}</dd></div><div><dt>Email</dt><dd>{user?.email}</dd></div><div><dt>Sign-in</dt><dd>{user?.authMethod}</dd></div></dl></Panel>
       <Panel title="Your data">
-        <p>Download everything we hold about you as JSON (uploaded files excluded).</p>
+        <p>Download your data as JSON or Word-compatible RTF, or use your browser's print dialog to save it as PDF (uploaded files excluded).</p>
         {exp.error && <Alert kind="error">{exp.error}</Alert>}
-        <button className="outline-button" onClick={exportData}><Download size={15} /> Export my data</button>
+        {exportError && <Alert kind="error">{exportError}</Alert>}
+        <div className="row-actions">
+          <button className="outline-button" disabled={exp.busy} onClick={() => void downloadExport("word")}><Download size={15} /> Download Word (RTF)</button>
+          <button className="outline-button" disabled={exp.busy} onClick={() => void printExportAsPdf()}><Download size={15} /> Save as PDF</button>
+          <button className="outline-button" disabled={exp.busy} onClick={() => void downloadExport("json")}><Download size={15} /> Download JSON</button>
+        </div>
         <hr />
         <form className="stack" onSubmit={remove}>
           <strong>Delete account</strong>
