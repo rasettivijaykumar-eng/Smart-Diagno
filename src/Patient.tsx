@@ -1156,6 +1156,36 @@ type StoredAlarmSound = { name: string; blob: Blob };
 const alarmLedgerKey = (userId: string) => `sd_alarm_ledger_v1:${userId}`;
 const alarmIntervalKey = (userId: string) => `sd_alarm_interval_v1:${userId}`;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAlarmEntry(value: unknown): value is AlarmEntry {
+  return isRecord(value)
+    && typeof value.medicine === "string"
+    && typeof value.dueAt === "number"
+    && Number.isFinite(value.dueAt)
+    && (value.color === undefined || typeof value.color === "string")
+    && (value.lastRangAt === undefined || (typeof value.lastRangAt === "number" && Number.isFinite(value.lastRangAt)))
+    && (value.acknowledged === undefined || typeof value.acknowledged === "boolean");
+}
+
+function readSnoozedDoses(): Record<string, number> {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}");
+    if (!isRecord(value)) throw new Error("Saved medicine snooze data is not an object.");
+    const snoozes: Record<string, number> = {};
+    for (const [key, snoozedUntil] of Object.entries(value)) {
+      if (typeof snoozedUntil === "number" && Number.isFinite(snoozedUntil)) snoozes[key] = snoozedUntil;
+      else console.warn("Ignoring an invalid saved medicine snooze value.");
+    }
+    return snoozes;
+  } catch (error) {
+    console.warn("Could not read saved medicine snooze data.", error);
+    return {};
+  }
+}
+
 function openAlarmSoundDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (!("indexedDB" in window)) {
@@ -1200,7 +1230,13 @@ async function saveAlarmSound(userId: string, sound: StoredAlarmSound | null): P
 function readAlarmLedger(userId: string): Record<string, AlarmEntry> {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(alarmLedgerKey(userId)) ?? "{}");
-    if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, AlarmEntry>;
+    if (!isRecord(value)) throw new Error("Saved medicine alarm state is not an object.");
+    const ledger: Record<string, AlarmEntry> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      if (isAlarmEntry(entry)) ledger[key] = entry;
+      else console.warn("Ignoring an invalid saved medicine alarm entry.");
+    }
+    return ledger;
   } catch (error) {
     console.warn("Could not read saved medicine alarm state.", error);
   }
@@ -1315,7 +1351,7 @@ export function Medicines() {
   const activeAudioKey = useRef<string | null>(null);
   const cancelledAlarms = useRef(new Set<string>());
   const alarmQueue = useRef(Promise.resolve());
-  const [snoozed, setSnoozed] = useState<Record<string, number>>(() => { try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "{}"); } catch { return {}; } });
+  const [snoozed, setSnoozed] = useState<Record<string, number>>(readSnoozedDoses);
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 5_000); return () => clearInterval(t); }, []);
 
